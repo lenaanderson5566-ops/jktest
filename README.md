@@ -53,6 +53,9 @@ docker compose exec web python manage.py makemigrations
 docker compose exec web python manage.py migrate
 ```
 
+
+> 容器启动命令已包含 `makemigrations --noinput` 与 `migrate`，新增模型（如 `sorting_job`）可自动建表。
+
 ## 主要模型分布
 
 - 主数据：`backend/apps/masterdata/models.py`
