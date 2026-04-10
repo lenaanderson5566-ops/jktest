@@ -6,7 +6,7 @@ from django.contrib import admin, messages
 from django.http import HttpResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect
-from django.urls import path
+from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
 from apps.masterdata.models import Organization, TransportRoute
@@ -15,6 +15,7 @@ from .models import OrganizationOrder
 
 @admin.register(OrganizationOrder)
 class OrganizationOrderAdmin(admin.ModelAdmin):
+    change_list_template = 'admin/excel_change_list.html'
     list_display = ('order_no', 'order_date', 'organization', 'route', 'status')
     search_fields = ('order_no', 'organization__org_no', 'organization__org_name')
     list_filter = ('order_date', 'route', 'status')
@@ -29,7 +30,12 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         return custom_urls + urls
 
     def changelist_view(self, request, extra_context=None):
-        messages.info(request, '机构订单: /import-excel/ 导入, /export-excel/ 导出, /template-excel/ 下载样表')
+        extra_context = extra_context or {}
+        extra_context.update({
+            'excel_import_url': reverse('admin:orders_order_import'),
+            'excel_export_url': reverse('admin:orders_order_export'),
+            'excel_template_url': reverse('admin:orders_order_template'),
+        })
         return super().changelist_view(request, extra_context)
 
     def import_excel(self, request):

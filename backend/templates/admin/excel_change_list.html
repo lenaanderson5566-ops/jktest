@@ -1,0 +1,14 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+  {% if excel_template_url %}
+    <li><a href="{{ excel_template_url }}">下载导入样表</a></li>
+  {% endif %}
+  {% if excel_export_url %}
+    <li><a href="{{ excel_export_url }}">导出Excel</a></li>
+  {% endif %}
+  {% if excel_import_url %}
+    <li><a href="{{ excel_import_url }}">导入Excel</a></li>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

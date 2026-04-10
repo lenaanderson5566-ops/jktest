@@ -6,7 +6,7 @@ from django.contrib import admin, messages
 from django.http import HttpRequest, HttpResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect
-from django.urls import path
+from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
 from .models import (
@@ -45,6 +45,7 @@ class ExcelMixin:
 
 @admin.register(TransportRoute)
 class TransportRouteAdmin(admin.ModelAdmin, ExcelMixin):
+    change_list_template = 'admin/excel_change_list.html'
     list_display = ('route_no', 'route_name', 'enabled')
     search_fields = ('route_no', 'route_name')
     model_label = '押运线路'
@@ -59,7 +60,12 @@ class TransportRouteAdmin(admin.ModelAdmin, ExcelMixin):
         return custom_urls + urls
 
     def changelist_view(self, request, extra_context=None):
-        messages.info(request, '押运线路: /import-excel/ 导入, /export-excel/ 导出, /template-excel/ 下载样表')
+        extra_context = extra_context or {}
+        extra_context.update({
+            'excel_import_url': reverse('admin:masterdata_transportroute_import'),
+            'excel_export_url': reverse('admin:masterdata_transportroute_export'),
+            'excel_template_url': reverse('admin:masterdata_transportroute_template'),
+        })
         return super().changelist_view(request, extra_context)
 
     @staticmethod
@@ -105,6 +111,7 @@ class TransportRouteAdmin(admin.ModelAdmin, ExcelMixin):
 
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin, ExcelMixin):
+    change_list_template = 'admin/excel_change_list.html'
     list_display = ('org_no', 'org_name', 'route', 'enabled')
     search_fields = ('org_no', 'org_name')
     list_filter = ('route', 'enabled')
@@ -120,7 +127,12 @@ class OrganizationAdmin(admin.ModelAdmin, ExcelMixin):
         return custom_urls + urls
 
     def changelist_view(self, request, extra_context=None):
-        messages.info(request, '机构: /import-excel/ 导入, /export-excel/ 导出, /template-excel/ 下载样表')
+        extra_context = extra_context or {}
+        extra_context.update({
+            'excel_import_url': reverse('admin:masterdata_organization_import'),
+            'excel_export_url': reverse('admin:masterdata_organization_export'),
+            'excel_template_url': reverse('admin:masterdata_organization_template'),
+        })
         return super().changelist_view(request, extra_context)
 
     @staticmethod
