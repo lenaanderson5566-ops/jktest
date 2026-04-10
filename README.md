@@ -59,3 +59,11 @@ docker compose exec web python manage.py migrate
 - 订单：`backend/apps/orders/models.py`
 - 优化参数：`backend/apps/optimizer/models.py`
 - 运行结果：`backend/apps/runs/models.py`
+
+## 排序计算
+
+```bash
+docker compose exec web python manage.py run_sorting --order-date 2026-04-10 --mode-no MODE001
+```
+
+> `--mode-no` 可省略，系统会按全局配置“默认优化模式编号”或第一个启用模式执行。
