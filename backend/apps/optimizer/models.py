@@ -1,4 +1,6 @@
 from django.db import models
+from django.db.models import Value
+from django.db.models.functions import Coalesce
 
 from apps.masterdata.models import PackingStation
 
@@ -41,7 +43,15 @@ class OptimizeModeParameter(models.Model):
         db_table = 'optimize_mode_parameter'
         verbose_name = '优化模式参数明细'
         verbose_name_plural = verbose_name
-        unique_together = ('mode', 'category', 'station')
+        constraints = [
+            models.UniqueConstraint(fields=['mode', 'category', 'station'], name='uq_mode_category_station'),
+            models.UniqueConstraint(
+                Coalesce('station', Value(0)),
+                'mode',
+                'category',
+                name='uq_mode_category_station_coalesced',
+            ),
+        ]
 
 
 class GlobalConfig(models.Model):

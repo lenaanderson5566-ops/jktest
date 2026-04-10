@@ -16,4 +16,4 @@ COPY . /app/
 
 EXPOSE 8000
 
-CMD ["bash", "-lc", "python manage.py migrate && python manage.py createsuperuser --noinput || true && gunicorn config.wsgi:application --bind 0.0.0.0:8000"]
+CMD ["bash", "-lc", "set -euo pipefail; python manage.py migrate; python manage.py createsuperuser --noinput || true; exec gunicorn config.wsgi:application --bind 0.0.0.0:8000"]
