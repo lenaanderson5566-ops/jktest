@@ -81,3 +81,17 @@ docker compose exec web python manage.py run_sorting --order-date 2026-04-10 --m
 2. 保存后自动放入后台执行
 3. 或在列表页勾选任务，执行“将选中任务放入后台执行”
 4. 执行完成后查看 `状态/结果批次号/结果信息`
+
+## Excel 导入导出
+
+已为以下管理对象提供 Excel 功能：
+
+- 押运线路
+- 机构
+- 机构订单
+
+在对应 admin 列表页可使用：
+
+- `.../import-excel/` 导入
+- `.../export-excel/` 导出
+- `.../template-excel/` 下载导入样表
