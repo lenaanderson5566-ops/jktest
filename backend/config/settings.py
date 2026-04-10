@@ -17,6 +17,7 @@ INSTALLED_APPS = [
     'apps.masterdata',
     'apps.orders',
     'apps.optimizer',
+    'apps.jobcenter',
     'apps.runs',
 ]
 

@@ -29,6 +29,7 @@
 │       ├── masterdata
 │       ├── orders
 │       ├── optimizer
+│       ├── jobcenter
 │       └── runs
 ```
 
@@ -61,6 +62,7 @@ docker compose exec web python manage.py migrate
 - 主数据：`backend/apps/masterdata/models.py`
 - 订单：`backend/apps/orders/models.py`
 - 优化参数：`backend/apps/optimizer/models.py`
+- 任务中心：`backend/apps/jobcenter/`（后台排序任务）
 - 运行结果：`backend/apps/runs/models.py`
 
 ## 排序计算
