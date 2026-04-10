@@ -10,7 +10,6 @@
   - 工位面额效率表 `station_denomination_efficiency`
 - `phpMyAdmin` 管理支持
 - Django 在 gunicorn 下通过 WhiteNoise 提供静态文件（已包含 admin 样式）
-- 容器启动会自动执行 `pip install -r requirements.txt`、`migrate`、`collectstatic`，并且仅在用户不存在时创建 superuser
 
 ## 目录结构
 
