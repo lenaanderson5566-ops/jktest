@@ -9,6 +9,7 @@
   - 工位支持面额表 `station_denomination_support`
   - 工位面额效率表 `station_denomination_efficiency`
 - `phpMyAdmin` 管理支持
+- Django 在 gunicorn 下通过 WhiteNoise 提供静态文件（已包含 admin 样式）
 
 ## 目录结构
 
