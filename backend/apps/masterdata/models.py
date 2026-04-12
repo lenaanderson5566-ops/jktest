@@ -87,6 +87,21 @@ class StationDenominationEfficiency(models.Model):
         unique_together = ('station', 'currency_type', 'denomination')
 
 
+class DenominationPackagingSpec(models.Model):
+    currency_type = models.CharField('币种类型', max_length=16, choices=CurrencyType.choices)
+    denomination = models.DecimalField('面额', max_digits=8, decimal_places=2)
+    units_per_package = models.PositiveIntegerField('每捆/包数量', help_text='如100元纸币每捆1000张，1元硬币每包500枚')
+    enabled = models.BooleanField('是否启用', default=True)
+    remark = models.CharField('备注', max_length=255, blank=True)
+
+    class Meta:
+        db_table = 'denomination_packaging_spec'
+        verbose_name = '面额封装规格'
+        verbose_name_plural = verbose_name
+        unique_together = ('currency_type', 'denomination')
+
+
+
 class TransferSegment(models.Model):
     from_station = models.ForeignKey(PackingStation, on_delete=models.PROTECT, related_name='transfer_from', verbose_name='起始工位')
     to_station = models.ForeignKey(PackingStation, on_delete=models.PROTECT, related_name='transfer_to', verbose_name='终点工位')

@@ -12,7 +12,7 @@ from django.shortcuts import redirect
 from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
-from apps.masterdata.models import Organization, TransportRoute
+from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, Organization, TransportRoute
 from .models import OrganizationOrder
 
 
@@ -64,7 +64,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
 
         token = get_token(request)
         return HttpResponse(
-            '<h3>机构订单 Excel 导入（兼容长表/宽表）</h3>'
+            '<h3>机构订单 Excel 导入（兼容长表/宽表，长表支持金额自动换算包/捆数）</h3>'
             '<form method="post" enctype="multipart/form-data">'
             f'<input type="hidden" name="csrfmiddlewaretoken" value="{token}" />'
             '<input type="file" name="file" accept=".xlsx" required />'
@@ -79,7 +79,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         headers = [str(v).strip() if v is not None else '' for v in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
 
         wide_required = {'订单编号', '订单日期', '机构号', '线路号', '100元捆数', '0.1元包数'}
-        long_required = {'订单日期', '机构号', '线路号', '面额', '数量'}
+        long_required = {'订单日期', '机构号', '线路号', '面额'}
         header_set = set(headers)
 
         if wide_required.issubset(header_set):
@@ -160,7 +160,11 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
             field = DENOMINATION_TO_FIELD.get(denom)
             if not field:
                 raise ValueError(f'不支持的面额: {row[idx["面额"]]}')
-            qty = int(Decimal(str(row[idx['数量']] or 0)))
+            qty_col = idx.get('数量')
+            amount_col = idx.get('金额')
+            qty_raw = row[qty_col] if qty_col is not None else None
+            amount_raw = row[amount_col] if amount_col is not None else None
+            qty = _resolve_quantity_from_row(denom, qty_raw, amount_raw)
             grouped[key][field] += qty
 
             status_col = idx.get('订单状态')
@@ -216,10 +220,9 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         ws1.append(['ORD20260410001', '2026-04-10', 'ORG001', 'R001', 10, 2, 0, 0, 1, 0, 0, 0, 'NEW', '宽表样例'])
 
         ws2 = wb.create_sheet('长表样例')
-        ws2.append(['订单编号', '订单日期', '机构号', '线路号', '面额', '数量', '订单状态', '备注'])
-        ws2.append(['ORD20260410002', '2026-04-10', 'ORG001', 'R001', 100, 10, 'NEW', '长表样例'])
-        ws2.append(['ORD20260410002', '2026-04-10', 'ORG001', 'R001', 50, 2, 'NEW', ''])
-        ws2.append(['ORD20260410002', '2026-04-10', 'ORG001', 'R001', 0.5, 3, 'NEW', ''])
+        ws2.append(['订单编号', '订单日期', '机构号', '线路号', '面额', '数量', '金额', '订单状态', '备注'])
+        ws2.append(['ORD20260410002', '2026-04-10', 'ORG001', 'R001', 100, 10, '', 'NEW', '数量导入样例'])
+        ws2.append(['ORD20260410003', '2026-04-10', 'ORG001', 'R001', 1, '', 1500, 'NEW', '金额导入样例(按封装规格换算)'])
 
         return self._wb_response(wb, 'organization_order_template.xlsx')
 

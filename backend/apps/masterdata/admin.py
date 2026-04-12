@@ -11,6 +11,7 @@ from openpyxl import Workbook, load_workbook
 
 from .models import (
     Organization,
+    DenominationPackagingSpec,
     PackingStation,
     StationDenominationEfficiency,
     StationDenominationSupport,
@@ -170,6 +171,12 @@ class OrganizationAdmin(admin.ModelAdmin, ExcelMixin):
         ws.append(['机构号', '机构名称', '所属线路号', '是否启用', '备注'])
         ws.append(['ORG001', '示例机构', 'R001', True, '样例数据'])
         return TransportRouteAdmin._wb_response(wb, 'organization_template.xlsx')
+
+
+@admin.register(DenominationPackagingSpec)
+class DenominationPackagingSpecAdmin(admin.ModelAdmin):
+    list_display = ('currency_type', 'denomination', 'units_per_package', 'enabled')
+    list_filter = ('currency_type', 'enabled')
 
 
 admin.site.register(PackingStation)
