@@ -94,4 +94,8 @@ docker compose exec web python manage.py run_sorting --order-date 2026-04-10 --m
 
 - `.../import-excel/` 导入
 - `.../export-excel/` 导出
-- `.../template-excel/` 下载导入样表
+- `.../template-excel/` 下载导入样表（机构订单模板同时提供“宽表样例”和“长表样例”）
+
+机构订单导入已兼容：
+- 宽表（单行单订单，面额分列）
+- 长表（多行单订单，按面额+数量，导入时自动聚合）

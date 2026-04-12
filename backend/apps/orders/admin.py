@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from datetime import date, datetime
+from decimal import Decimal
 from io import BytesIO
 
 from django.contrib import admin, messages
@@ -11,6 +14,18 @@ from openpyxl import Workbook, load_workbook
 
 from apps.masterdata.models import Organization, TransportRoute
 from .models import OrganizationOrder
+
+
+DENOMINATION_TO_FIELD = {
+    '100': 'qty_100',
+    '50': 'qty_50',
+    '20': 'qty_20',
+    '10': 'qty_10',
+    '5': 'qty_5',
+    '1': 'qty_coin_1',
+    '0.5': 'qty_coin_05',
+    '0.1': 'qty_coin_01',
+}
 
 
 @admin.register(OrganizationOrder)
@@ -42,14 +57,14 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         if request.method == 'POST' and request.FILES.get('file'):
             try:
                 self._handle_upload(request.FILES['file'])
-                messages.success(request, '机构订单导入成功')
+                messages.success(request, '机构订单导入成功（自动兼容长表/宽表）')
             except Exception as exc:  # noqa: BLE001
                 messages.error(request, f'机构订单导入失败: {exc}')
             return redirect('..')
 
         token = get_token(request)
         return HttpResponse(
-            '<h3>机构订单 Excel 导入</h3>'
+            '<h3>机构订单 Excel 导入（兼容长表/宽表）</h3>'
             '<form method="post" enctype="multipart/form-data">'
             f'<input type="hidden" name="csrfmiddlewaretoken" value="{token}" />'
             '<input type="file" name="file" accept=".xlsx" required />'
@@ -57,15 +72,105 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
             '</form>'
         )
 
-    @staticmethod
-    def _handle_upload(file_obj):
+    @classmethod
+    def _handle_upload(cls, file_obj):
         wb = load_workbook(file_obj)
         ws = wb.active
+        headers = [str(v).strip() if v is not None else '' for v in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
+
+        wide_required = {'订单编号', '订单日期', '机构号', '线路号', '100元捆数', '0.1元包数'}
+        long_required = {'订单日期', '机构号', '线路号', '面额', '数量'}
+        header_set = set(headers)
+
+        if wide_required.issubset(header_set):
+            cls._import_wide(ws, headers)
+            return
+        if long_required.issubset(header_set):
+            cls._import_long(ws, headers)
+            return
+        raise ValueError('无法识别模板格式，请使用系统下载的宽表或长表样表。')
+
+    @staticmethod
+    def _import_wide(ws, headers):
+        idx = {name: i for i, name in enumerate(headers)}
         for row in ws.iter_rows(min_row=2, values_only=True):
-            if not row or not row[0]:
+            if not row or not row[idx['订单编号']]:
                 continue
-            org_no = str(row[2] or '').strip()
-            route_no = str(row[3] or '').strip()
+            order_no = str(row[idx['订单编号']]).strip()
+            order_date = _to_date(row[idx['订单日期']])
+            org_no = str(row[idx['机构号']] or '').strip()
+            route_no = str(row[idx['线路号']] or '').strip()
+            org = Organization.objects.filter(org_no=org_no).first()
+            route = TransportRoute.objects.filter(route_no=route_no).first()
+            if not org:
+                raise ValueError(f'找不到机构号: {org_no}')
+            if not route:
+                raise ValueError(f'找不到线路号: {route_no}')
+
+            OrganizationOrder.objects.update_or_create(
+                order_no=order_no,
+                defaults={
+                    'order_date': order_date,
+                    'organization': org,
+                    'route': route,
+                    'qty_100': int(row[idx.get('100元捆数', -1)] or 0),
+                    'qty_50': int(row[idx.get('50元捆数', -1)] or 0),
+                    'qty_20': int(row[idx.get('20元捆数', -1)] or 0),
+                    'qty_10': int(row[idx.get('10元捆数', -1)] or 0),
+                    'qty_5': int(row[idx.get('5元捆数', -1)] or 0),
+                    'qty_coin_1': int(row[idx.get('1元包数', -1)] or 0),
+                    'qty_coin_05': int(row[idx.get('0.5元包数', -1)] or 0),
+                    'qty_coin_01': int(row[idx.get('0.1元包数', -1)] or 0),
+                    'status': str(row[idx.get('订单状态', -1)] or 'NEW'),
+                    'remark': str(row[idx.get('备注', -1)] or '').strip(),
+                },
+            )
+
+    @staticmethod
+    def _import_long(ws, headers):
+        idx = {name: i for i, name in enumerate(headers)}
+        grouped = defaultdict(lambda: {
+            'qty_100': 0,
+            'qty_50': 0,
+            'qty_20': 0,
+            'qty_10': 0,
+            'qty_5': 0,
+            'qty_coin_1': 0,
+            'qty_coin_05': 0,
+            'qty_coin_01': 0,
+            'status': 'NEW',
+            'remark': '',
+        })
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row:
+                continue
+            order_date = _to_date(row[idx['订单日期']])
+            org_no = str(row[idx['机构号']] or '').strip()
+            route_no = str(row[idx['线路号']] or '').strip()
+            if not org_no or not route_no:
+                continue
+
+            order_no_col = idx.get('订单编号')
+            order_no_val = str(row[order_no_col]).strip() if order_no_col is not None and row[order_no_col] else ''
+            order_no = order_no_val or f'ORD-{order_date.strftime("%Y%m%d")}-{org_no}-{route_no}'
+            key = (order_no, order_date, org_no, route_no)
+
+            denom = _normalize_denomination(row[idx['面额']])
+            field = DENOMINATION_TO_FIELD.get(denom)
+            if not field:
+                raise ValueError(f'不支持的面额: {row[idx["面额"]]}')
+            qty = int(Decimal(str(row[idx['数量']] or 0)))
+            grouped[key][field] += qty
+
+            status_col = idx.get('订单状态')
+            if status_col is not None and row[status_col]:
+                grouped[key]['status'] = str(row[status_col]).strip()
+            remark_col = idx.get('备注')
+            if remark_col is not None and row[remark_col]:
+                grouped[key]['remark'] = str(row[remark_col]).strip()
+
+        for (order_no, order_date, org_no, route_no), payload in grouped.items():
             org = Organization.objects.filter(org_no=org_no).first()
             route = TransportRoute.objects.filter(route_no=route_no).first()
             if not org:
@@ -73,27 +178,19 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
             if not route:
                 raise ValueError(f'找不到线路号: {route_no}')
             OrganizationOrder.objects.update_or_create(
-                order_no=str(row[0]).strip(),
+                order_no=order_no,
                 defaults={
-                    'order_date': row[1],
+                    'order_date': order_date,
                     'organization': org,
                     'route': route,
-                    'qty_100': int(row[4] or 0),
-                    'qty_50': int(row[5] or 0),
-                    'qty_20': int(row[6] or 0),
-                    'qty_10': int(row[7] or 0),
-                    'qty_5': int(row[8] or 0),
-                    'qty_coin_1': int(row[9] or 0),
-                    'qty_coin_05': int(row[10] or 0),
-                    'qty_coin_01': int(row[11] or 0),
-                    'status': str(row[12] or 'NEW'),
-                    'remark': str(row[13] or '').strip(),
+                    **payload,
                 },
             )
 
     def export_excel(self, request):
         wb = Workbook()
         ws = wb.active
+        ws.title = '宽表导出'
         ws.append([
             '订单编号', '订单日期', '机构号', '线路号',
             '100元捆数', '50元捆数', '20元捆数', '10元捆数', '5元捆数',
@@ -109,13 +206,21 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
 
     def template_excel(self, request):
         wb = Workbook()
-        ws = wb.active
-        ws.append([
+        ws1 = wb.active
+        ws1.title = '宽表样例'
+        ws1.append([
             '订单编号', '订单日期', '机构号', '线路号',
             '100元捆数', '50元捆数', '20元捆数', '10元捆数', '5元捆数',
             '1元包数', '0.5元包数', '0.1元包数', '订单状态', '备注',
         ])
-        ws.append(['ORD20260410001', '2026-04-10', 'ORG001', 'R001', 10, 2, 0, 0, 1, 0, 0, 0, 'NEW', '样例订单'])
+        ws1.append(['ORD20260410001', '2026-04-10', 'ORG001', 'R001', 10, 2, 0, 0, 1, 0, 0, 0, 'NEW', '宽表样例'])
+
+        ws2 = wb.create_sheet('长表样例')
+        ws2.append(['订单编号', '订单日期', '机构号', '线路号', '面额', '数量', '订单状态', '备注'])
+        ws2.append(['ORD20260410002', '2026-04-10', 'ORG001', 'R001', 100, 10, 'NEW', '长表样例'])
+        ws2.append(['ORD20260410002', '2026-04-10', 'ORG001', 'R001', 50, 2, 'NEW', ''])
+        ws2.append(['ORD20260410002', '2026-04-10', 'ORG001', 'R001', 0.5, 3, 'NEW', ''])
+
         return self._wb_response(wb, 'organization_order_template.xlsx')
 
     @staticmethod
@@ -126,3 +231,17 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         response['Content-Disposition'] = f'attachment; filename={filename}'
         return response
+
+
+def _to_date(value) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return datetime.strptime(str(value), '%Y-%m-%d').date()
+
+
+def _normalize_denomination(value) -> str:
+    d = Decimal(str(value)).normalize()
+    txt = format(d, 'f').rstrip('0').rstrip('.')
+    return txt if txt else '0'
