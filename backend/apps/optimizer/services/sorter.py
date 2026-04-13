@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 import logging
@@ -51,11 +51,22 @@ class PipelineBoxAggregate:
     organization_id: int
     route: object
     route_id: int
-    source_order: OrganizationOrder
-    source_seq_no: int
-    source_box_seq_no: int
-    denomination: Decimal
-    bundle_count: int
+    source_orders: List[OrganizationOrder] = field(default_factory=list)
+    source_seq_no: int = 0
+    source_box_seq_no: int = 0
+    denomination_bundles: Dict[Decimal, int] = field(default_factory=dict)
+
+    @property
+    def source_order(self) -> OrganizationOrder:
+        return self.source_orders[0]
+
+    @property
+    def bundle_count(self) -> int:
+        return int(sum(self.denomination_bundles.values()))
+
+    @property
+    def denominations(self) -> List[Decimal]:
+        return sorted(self.denomination_bundles.keys(), reverse=True)
 
 
 class SortingEngine:
@@ -160,17 +171,21 @@ class SortingEngine:
         return sum(self._box_station_process_seconds(box, station) for station in self.stations)
 
     def _box_station_process_seconds(self, box: PipelineBoxAggregate, station: PackingStation) -> float:
-        duration = float(station.fixed_boxing_seconds)
         eff_map = self.efficiency_map.get(station.id, {})
-        max_units, unit_seconds = eff_map.get(
-            box.denomination,
-            (int(station.max_units_per_action), float(station.unit_boxing_seconds)),
-        )
-        bundles = max(0, int(box.bundle_count))
-        if bundles <= 0:
-            return duration
-        batches = (bundles + max_units - 1) // max_units if max_units > 0 else bundles
-        return duration + float(batches) * unit_seconds
+        denom_items = [
+            (denom, max(0, int(qty)))
+            for denom, qty in box.denomination_bundles.items()
+            if max(0, int(qty)) > 0 and denom in eff_map
+        ]
+        if not denom_items:
+            return 0.0
+
+        duration = float(station.fixed_boxing_seconds)
+        for denom, bundles in denom_items:
+            max_units, unit_seconds = eff_map[denom]
+            batches = (bundles + max_units - 1) // max_units if max_units > 0 else bundles
+            duration += float(batches) * unit_seconds
+        return duration
 
     def _evaluate(self, sequence: Sequence[PipelineBoxAggregate]) -> dict:
         self.eval_count += 1
@@ -352,9 +367,10 @@ class SortingEngine:
         for index, (order, start_seconds, finish_seconds) in enumerate(evaluation['timings'], start=1):
             start_seconds = round(start_seconds, 2)
             finish_seconds = round(finish_seconds, 2)
+            denom_desc = ', '.join(f'{format(denom, "f")}x{qty}' for denom, qty in sorted(order.denomination_bundles.items(), reverse=True))
             SortedOrderResult.objects.create(
                 batch=summary,
-                seq_no=order.source_seq_no,
+                seq_no=index,
                 order=order.source_order,
                 order_date=order.order_date,
                 organization=order.organization,
@@ -363,7 +379,7 @@ class SortingEngine:
                 est_start_time=base_dt + timedelta(seconds=start_seconds),
                 est_finish_time=base_dt + timedelta(seconds=finish_seconds),
                 est_total_seconds=Decimal(str(finish_seconds)),
-                remark=f'按箱排序-原箱序号:{order.source_box_seq_no}',
+                remark=(f'按逻辑箱聚合排序-原箱序号:{order.source_box_seq_no}; 面额明细:{denom_desc}')[:255],
             )
 
         return summary
@@ -403,7 +419,7 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
     )
     if not order_rows:
         raise ValueError(f'{order_date} 没有可排序订单。')
-    boxes: list[PipelineBoxAggregate] = []
+    aggregated_boxes: dict[tuple[str, object, int, int, int], PipelineBoxAggregate] = {}
     for row in order_rows:
         pipeline_boxes = sorted(
             [
@@ -414,21 +430,30 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
             key=lambda item: item.seq_no,
         )
         for box in pipeline_boxes:
-            boxes.append(
-                PipelineBoxAggregate(
+            box_key = (row.order_no, row.order_date, row.organization_id, row.route_id, int(box.seq_no))
+            aggregate = aggregated_boxes.get(box_key)
+            if aggregate is None:
+                aggregate = PipelineBoxAggregate(
                     order_no=row.order_no,
                     order_date=row.order_date,
                     organization=row.organization,
                     organization_id=row.organization_id,
                     route=row.route,
                     route_id=row.route_id,
-                    source_order=row,
-                    source_seq_no=len(boxes) + 1,
-                    source_box_seq_no=box.seq_no,
-                    denomination=Decimal(str(row.denomination)),
-                    bundle_count=int(box.bundle_count),
+                    source_orders=[],
+                    source_seq_no=len(aggregated_boxes) + 1,
+                    source_box_seq_no=int(box.seq_no),
+                    denomination_bundles={},
                 )
-            )
+                aggregated_boxes[box_key] = aggregate
+            aggregate.source_orders.append(row)
+            denom = Decimal(str(row.denomination))
+            aggregate.denomination_bundles[denom] = aggregate.denomination_bundles.get(denom, 0) + int(box.bundle_count)
+
+    boxes = sorted(
+        aggregated_boxes.values(),
+        key=lambda item: (item.order_no, item.organization_id, item.route_id, item.source_box_seq_no),
+    )
     if not boxes:
         raise ValueError(f'{order_date} 没有可进入流水线的订单明细。')
 
