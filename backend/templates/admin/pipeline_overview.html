@@ -40,6 +40,7 @@
   <h3 style="margin-top:20px;">装箱排序与分配方案对比（仿真）</h3>
   <p style="color:#666;">说明：若某些面额仅有一个兼容工位，则不同策略在该面额上的分配会天然一致，相关指标可能相同。</p>
   <p style="color:#666;">工位跨度=该工位首箱开始到末箱结束的时间窗口。当前“1号位/3号位集中导向”按业务定义实现为“优先压短对应工位跨度”：通过目标工位任务前置聚集 + 可分流量外移来缩短时间窗口。</p>
+    <p><a class="button" href="{{ strategy_export_url }}">下载全部方案详细结果（Excel）</a></p>
   {% if not has_data %}
     <p>暂无流水线箱清单数据，请先导入订单并生成流水线拆分后再查看方案对比结果。</p>
   {% else %}
@@ -56,6 +57,7 @@
           <th>工位跨度(秒)</th>
           <th>工位分配捆数</th>
           <th>排序预览</th>
+          <th>下载详情</th>
         </tr>
       </thead>
       <tbody>
@@ -87,6 +89,7 @@
               {% endfor %}
             </td>
             <td>{{ row.metrics.sequence_preview|join:" → " }}</td>
+            <td><a href="{{ strategy_export_url }}?strategy={{ row.key }}">下载{{ row.name }}详情</a></td>
           </tr>
         {% endfor %}
       </tbody>

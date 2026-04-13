@@ -35,7 +35,7 @@ class StrategyResult:
     metrics: dict
 
 
-def build_strategy_comparison() -> dict:
+def build_strategy_comparison(include_details: bool = False) -> dict:
     boxes = _load_boxes()
     if not boxes:
         return {'results': [], 'has_data': False}
@@ -73,7 +73,7 @@ def build_strategy_comparison() -> dict:
     results: list[StrategyResult] = []
     for key, name, seq_fn, alloc_mode in strategies:
         sequenced = seq_fn(boxes)
-        metrics = _simulate(sequenced, stations, transfer_map, support_map, eff_map, alloc_mode, station_order_map, entry_interval)
+        metrics = _simulate(sequenced, stations, transfer_map, support_map, eff_map, alloc_mode, station_order_map, entry_interval, collect_details=include_details)
         metrics['sequence_preview'] = [f"{b.organization_name}-{b.seq_no}" for b in sequenced[:8]]
         results.append(StrategyResult(key=key, name=name, metrics=metrics))
 
@@ -235,6 +235,7 @@ def _simulate(
     alloc_mode: str,
     station_order_map: dict[int, int],
     box_entry_interval: float,
+    collect_details: bool = False,
 ) -> dict:
     if not boxes:
         return {}
@@ -251,6 +252,7 @@ def _simulate(
     prev_route = None
 
     last_box_finish = 0.0
+    box_details: list[dict] = []
     for box_idx, box in enumerate(boxes):
         if prev_route and prev_route != box.route_no:
             route_switches += 1
@@ -269,6 +271,7 @@ def _simulate(
             station_order_map,
             eff_map,
         )
+        box_station_steps: list[dict] = []
 
         for station in stations:
             station_id = station.id
@@ -294,8 +297,31 @@ def _simulate(
             station_last_end[station_id] = end_time
             station_busy[station_id] += proc_time
 
+            box_station_steps.append({
+                'station_id': station_id,
+                'station_name': station.station_name,
+                'start': round(start_time, 2),
+                'end': round(end_time, 2),
+                'process_seconds': round(proc_time, 2),
+                'allocations': {denom: int(qty) for denom, qty in quantities.items()},
+            })
+
             prev_finish = end_time
             prev_station_id = station_id
+
+        if collect_details:
+            box_details.append({
+                'box_index': box_idx + 1,
+                'order_no': box.order_no,
+                'organization_name': box.organization_name,
+                'route_no': box.route_no,
+                'box_seq_no': box.seq_no,
+                'release_time': round(release_time, 2),
+                'finish_time': round(prev_finish, 2),
+                'total_bundles': box.total_bundles,
+                'denoms': dict(box.denoms),
+                'station_steps': box_station_steps,
+            })
 
         last_box_finish = max(last_box_finish, prev_finish)
 
@@ -317,6 +343,7 @@ def _simulate(
         'line_continuity': continuity,
         'route_cluster_score': route_cluster_score,
         'route_switches': route_switches,
+        'box_details': box_details if collect_details else [],
     }
 
 

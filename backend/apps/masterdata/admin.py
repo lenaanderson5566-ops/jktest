@@ -239,7 +239,82 @@ def pipeline_overview_page(request, admin_site):
         'title': '流水线概览示意图',
         **build_pipeline_context(),
         **strategy_context,
+        'strategy_export_url': reverse('admin_strategy_export'),
     })
+
+
+def pipeline_strategy_export_page(request, admin_site):
+    from apps.orders.optimization import build_strategy_comparison
+
+    target = (request.GET.get('strategy') or '').strip()
+    context = build_strategy_comparison(include_details=True)
+    results = context.get('results', [])
+
+    if target:
+        results = [row for row in results if row.key == target]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '方案汇总'
+    ws.append([
+        '方案key', '方案名称', '总完工时长(秒)', '线路连续性', '线路切换次数', '线路聚集度', '排序预览'
+    ])
+
+    for row in results:
+        metrics = row.metrics
+        ws.append([
+            row.key,
+            row.name,
+            metrics.get('total_finish_seconds', 0),
+            metrics.get('line_continuity', 0),
+            metrics.get('route_switches', 0),
+            metrics.get('route_cluster_score', 0),
+            ' -> '.join(metrics.get('sequence_preview', [])),
+        ])
+
+    for row in results:
+        metrics = row.metrics
+        detail_rows = metrics.get('box_details', [])
+
+        ws_box = wb.create_sheet(title=f"{row.key[:20]}_箱序")
+        ws_box.append([
+            '箱序', '订单号', '机构', '线路', '箱号', '投放时间', '完成时间', '总捆数', '面额明细'
+        ])
+        for detail in detail_rows:
+            denom_txt = '; '.join([f"{k}:{v}" for k, v in sorted(detail.get('denoms', {}).items())])
+            ws_box.append([
+                detail.get('box_index'),
+                detail.get('order_no'),
+                detail.get('organization_name'),
+                detail.get('route_no'),
+                detail.get('box_seq_no'),
+                detail.get('release_time'),
+                detail.get('finish_time'),
+                detail.get('total_bundles'),
+                denom_txt,
+            ])
+
+        ws_station = wb.create_sheet(title=f"{row.key[:20]}_工位")
+        ws_station.append([
+            '箱序', '订单号', '机构', '线路', '工位', '开始时间', '结束时间', '处理时长', '分配明细'
+        ])
+        for detail in detail_rows:
+            for step in detail.get('station_steps', []):
+                alloc_txt = '; '.join([f"{k}:{v}" for k, v in sorted(step.get('allocations', {}).items())])
+                ws_station.append([
+                    detail.get('box_index'),
+                    detail.get('order_no'),
+                    detail.get('organization_name'),
+                    detail.get('route_no'),
+                    step.get('station_name'),
+                    step.get('start'),
+                    step.get('end'),
+                    step.get('process_seconds'),
+                    alloc_txt,
+                ])
+
+    filename = f"strategy_detail_{target or 'all'}.xlsx"
+    return TransportRouteAdmin._wb_response(wb, filename)
 
 
 @admin.register(StationDenominationSupport)
