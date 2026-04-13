@@ -37,8 +37,8 @@ class OrganizationOrder(models.Model):
         verbose_name_plural = verbose_name
         unique_together = ('order_no', 'currency_type', 'denomination')
         indexes = [
-            models.Index(fields=['order_date', 'route']),
-            models.Index(fields=['status']),
+            models.Index(fields=['order_date', 'route'], name='organizatio_order_d_f8e7bc_idx'),
+            models.Index(fields=['status'], name='organizatio_status_803f99_idx'),
         ]
 
     def __str__(self):

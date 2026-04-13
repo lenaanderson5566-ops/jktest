@@ -54,4 +54,4 @@ class SortedOrderResult(models.Model):
         verbose_name = '排序结果'
         verbose_name_plural = verbose_name
         unique_together = ('batch', 'seq_no')
-        indexes = [models.Index(fields=['order_date', 'route'])]
+        indexes = [models.Index(fields=['order_date', 'route'], name='sorted_orde_order_d_ed21c7_idx')]

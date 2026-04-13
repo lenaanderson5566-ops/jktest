@@ -27,5 +27,5 @@ class SortingJob(models.Model):
         verbose_name = '排序计算任务'
         verbose_name_plural = verbose_name
         indexes = [
-            models.Index(fields=['order_date', 'status']),
+            models.Index(fields=['order_date', 'status'], name='sorting_job_order_d_01f655_idx'),
         ]
