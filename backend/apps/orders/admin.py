@@ -31,6 +31,7 @@ DENOMINATION_TO_FIELD = {
     '1': 'qty_coin_1',
     '0.5': 'qty_coin_05',
     '0.1': 'qty_coin_01',
+    '0.01': 'qty_coin_001',
 }
 
 FIELD_TO_DENOMINATION = {v: k for k, v in DENOMINATION_TO_FIELD.items()}
@@ -43,6 +44,7 @@ DENOMINATION_LABEL_MAP = {
     '1': '1元包数',
     '0.5': '0.5元包数',
     '0.1': '0.1元包数',
+    '0.01': '0.01元包数',
 }
 DEFAULT_ADMIN_FIELDS = ('order_no', 'order_date', 'organization', 'route')
 TAIL_ADMIN_FIELDS = ('status', 'remark')
@@ -147,6 +149,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
                 'qty_coin_1': int(row[idx.get('1元包数', -1)] or 0),
                 'qty_coin_05': int(row[idx.get('0.5元包数', -1)] or 0),
                 'qty_coin_01': int(row[idx.get('0.1元包数', -1)] or 0),
+                'qty_coin_001': int(row[idx.get('0.01元包数', -1)] or 0),
                 'status': str(row[idx.get('订单状态', -1)] or 'NEW'),
                 'remark': str(row[idx.get('备注', -1)] or '').strip(),
             }
@@ -170,6 +173,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
             'qty_coin_1': 0,
             'qty_coin_05': 0,
             'qty_coin_01': 0,
+            'qty_coin_001': 0,
             'status': 'NEW',
             'remark': '',
         })
@@ -234,13 +238,13 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         ws.append([
             '订单编号', '订单日期', '机构号', '线路号',
             '100元捆数', '50元捆数', '20元捆数', '10元捆数', '5元捆数',
-            '1元包数', '0.5元包数', '0.1元包数', '订单状态', '备注',
+            '1元包数', '0.5元包数', '0.1元包数', '0.01元包数', '订单状态', '备注',
         ])
         for obj in OrganizationOrder.objects.select_related('organization', 'route').all().order_by('order_date', 'order_no'):
             ws.append([
                 obj.order_no, obj.order_date, obj.organization.org_no, obj.route.route_no,
                 obj.qty_100, obj.qty_50, obj.qty_20, obj.qty_10, obj.qty_5,
-                obj.qty_coin_1, obj.qty_coin_05, obj.qty_coin_01, obj.status, obj.remark,
+                obj.qty_coin_1, obj.qty_coin_05, obj.qty_coin_01, obj.qty_coin_001, obj.status, obj.remark,
             ])
         return self._wb_response(wb, 'organization_order_export.xlsx')
 
@@ -251,9 +255,9 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         ws1.append([
             '订单编号', '订单日期', '机构号', '线路号',
             '100元捆数', '50元捆数', '20元捆数', '10元捆数', '5元捆数',
-            '1元包数', '0.5元包数', '0.1元包数', '订单状态', '备注',
+            '1元包数', '0.5元包数', '0.1元包数', '0.01元包数', '订单状态', '备注',
         ])
-        ws1.append(['ORD20260410001', '2026-04-10', 'ORG001', 'R001', 10, 2, 0, 0, 1, 0, 0, 0, 'NEW', '宽表样例'])
+        ws1.append(['ORD20260410001', '2026-04-10', 'ORG001', 'R001', 10, 2, 0, 0, 1, 0, 0, 0, 0, 'NEW', '宽表样例'])
 
         ws2 = wb.create_sheet('长表样例')
         ws2.append(['订单编号', '订单日期', '机构号', '线路号', '面额', '数量', '金额', '订单状态', '备注'])

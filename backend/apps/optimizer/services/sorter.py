@@ -29,6 +29,7 @@ DENOMINATION_FIELDS = {
     Decimal('1'): 'qty_coin_1',
     Decimal('0.5'): 'qty_coin_05',
     Decimal('0.1'): 'qty_coin_01',
+    Decimal('0.01'): 'qty_coin_001',
 }
 
 

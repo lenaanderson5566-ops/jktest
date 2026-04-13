@@ -35,6 +35,7 @@ class OrganizationOrder(models.Model):
     qty_coin_1 = models.PositiveIntegerField('1元包数', default=0)
     qty_coin_05 = models.PositiveIntegerField('0.5元包数', default=0)
     qty_coin_01 = models.PositiveIntegerField('0.1元包数', default=0)
+    qty_coin_001 = models.PositiveIntegerField('0.01元包数', default=0)
 
     status = models.CharField('订单状态', max_length=16, choices=OrderStatus.choices, default=OrderStatus.NEW)
     remark = models.CharField('备注', max_length=255, blank=True)
@@ -62,6 +63,7 @@ class OrganizationOrder(models.Model):
             '1': self.qty_coin_1,
             '0.5': self.qty_coin_05,
             '0.1': self.qty_coin_01,
+            '0.01': self.qty_coin_001,
         }
         for denom_text, qty in checks.items():
             if qty and qty > 0:
