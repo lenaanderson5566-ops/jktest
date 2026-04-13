@@ -28,9 +28,7 @@
 │   └── apps
 │       ├── masterdata
 │       ├── orders
-│       ├── optimizer
-│       ├── jobcenter
-│       └── runs
+│       └── optimizer
 ```
 
 ## 快速启动
@@ -55,32 +53,12 @@ docker compose exec web python manage.py migrate
 ```
 
 
-> 容器启动命令已包含 `makemigrations --noinput` 与 `migrate`，新增模型（如 `sorting_job`）可自动建表。
 
 ## 主要模型分布
 
 - 主数据：`backend/apps/masterdata/models.py`
 - 订单：`backend/apps/orders/models.py`
 - 优化参数：`backend/apps/optimizer/models.py`
-- 任务中心：`backend/apps/jobcenter/`（后台排序任务）
-- 运行结果：`backend/apps/runs/models.py`
-
-## 排序计算
-
-```bash
-docker compose exec web python manage.py run_sorting --order-date 2026-04-10 --mode-no MODE001
-```
-
-> `--mode-no` 可省略，系统会按全局配置“默认优化模式编号”或第一个启用模式执行。
-
-## 管理界面后台排序
-
-在 Django Admin 中使用 **“排序计算任务”**：
-
-1. 新增任务（填写订单日期、可选优化模式）
-2. 保存后自动放入后台执行
-3. 或在列表页勾选任务，执行“将选中任务放入后台执行”
-4. 执行完成后查看 `状态/结果批次号/结果信息`
 
 ## Excel 导入导出
 
@@ -113,9 +91,6 @@ docker compose exec web python manage.py run_sorting --order-date 2026-04-10 --m
 - 阈值配置改为主数据下“全局配置”统一编辑保存：
   - 走人工捆数阈值(捆)（默认20）
   - 流水线单箱捆数上限(捆)（默认16）
-  - 默认优化模式编号（可选）
-  - 线路切换惩罚系数（默认0.2）
-  - 最大重启次数（默认5）
   - 流水线单箱捆数上限对同一订单下所有纸币面额共用，不按单个面额单独计算
   - 英文配置键由系统内部维护，后台不暴露编辑
 

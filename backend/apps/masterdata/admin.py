@@ -33,9 +33,6 @@ class MasterdataGlobalConfig(OptimizerGlobalConfig):
 class GlobalConfigForm(forms.Form):
     manual_pack_threshold = forms.IntegerField(label='走人工捆数阈值(捆)', min_value=1)
     pipeline_box_capacity = forms.IntegerField(label='流水线单箱捆数上限(捆)', min_value=1)
-    default_mode_no = forms.CharField(label='默认优化模式编号', required=False, max_length=32)
-    route_switch_penalty = forms.DecimalField(label='线路切换惩罚系数', min_value=0, decimal_places=4, max_digits=12)
-    max_restart_count = forms.IntegerField(label='最大重启次数', min_value=1)
 
 
 class ExcelMixin:
@@ -230,18 +227,12 @@ class GlobalConfigAdmin(admin.ModelAdmin):
             if form.is_valid():
                 _upsert_config('MANUAL_PACK_THRESHOLD', str(form.cleaned_data['manual_pack_threshold']), '走人工捆数阈值(捆)')
                 _upsert_config('PIPELINE_BOX_CAPACITY', str(form.cleaned_data['pipeline_box_capacity']), '流水线单箱捆数上限(捆)')
-                _upsert_config('默认优化模式编号', str(form.cleaned_data['default_mode_no']).strip(), '默认优化模式编号')
-                _upsert_config('线路切换惩罚系数', str(form.cleaned_data['route_switch_penalty']), '线路切换惩罚系数')
-                _upsert_config('最大重启次数', str(form.cleaned_data['max_restart_count']), '最大重启次数')
                 messages.success(request, '全局配置已保存')
                 return redirect('admin:masterdata_globalconfig_settings')
         else:
             form = GlobalConfigForm(initial={
                 'manual_pack_threshold': _read_int_config('MANUAL_PACK_THRESHOLD', 20),
                 'pipeline_box_capacity': _read_int_config('PIPELINE_BOX_CAPACITY', 16),
-                'default_mode_no': _read_str_config('默认优化模式编号', ''),
-                'route_switch_penalty': _read_decimal_config('线路切换惩罚系数', '0.2'),
-                'max_restart_count': _read_int_config('最大重启次数', 5),
             })
 
         return render(request, 'admin/global_config_form.html', {
@@ -261,15 +252,6 @@ def _read_int_config(key: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
 
-
-def _read_decimal_config(key: str, default: str) -> str:
-    row = OptimizerGlobalConfig.objects.filter(config_key=key).first()
-    return str(row.config_value).strip() if row and str(row.config_value).strip() else default
-
-
-def _read_str_config(key: str, default: str) -> str:
-    row = OptimizerGlobalConfig.objects.filter(config_key=key).first()
-    return str(row.config_value).strip() if row else default
 
 
 def _upsert_config(key: str, value: str, remark: str):
