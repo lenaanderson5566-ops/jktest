@@ -171,7 +171,7 @@ def _sequence_station_focus(
 ) -> list[BoxItem]:
     blocks = _split_org_blocks(boxes)
 
-    def score(block: list[BoxItem]) -> tuple[int, int]:
+    def score(block: list[BoxItem]) -> tuple[int, int, str]:
         focus_qty = 0
         total_qty = 0
         for box in block:
@@ -181,7 +181,9 @@ def _sequence_station_focus(
                     if station_order_map.get(sid) == target_order:
                         focus_qty += qty
                         break
-        return -focus_qty, -total_qty
+        # 目标：把需要目标工位的箱尽量排在一起（前置），压缩目标工位跨度窗口
+        has_focus = 0 if focus_qty > 0 else 1
+        return has_focus, -focus_qty, block[0].route_no
 
     blocks.sort(key=score)
     return [x for block in blocks for x in block]
@@ -356,25 +358,30 @@ def _allocate_for_box(
 
         if alloc_mode in ('station_1', 'station_3'):
             preferred = [sid for sid in compatible if station_order_map.get(sid) == preferred_station_no]
-            lead = preferred[0] if preferred else ranked[0]
+            target = preferred[0] if preferred else ranked[0]
 
             avg_load = sum(station_load_counter[sid] for sid in compatible) / max(1, len(compatible))
-            lead_load = station_load_counter[lead]
-            overload_ratio = max(0.0, (lead_load - avg_load) / max(1.0, avg_load))
-            # 集中导向但抑制目标工位过载，避免跨度被不必要拉长
-            lead_ratio = max(0.55, 0.8 - (0.25 * overload_ratio))
+            target_load = station_load_counter[target]
+            overload_ratio = max(0.0, (target_load - avg_load) / max(1.0, avg_load))
+            # 用户定义的“X号位集中导向”=尽量压短X号位跨度：
+            # 将可分流部分优先转移到其它兼容工位，仅保留必要负载在目标工位。
+            target_ratio = max(0.1, 0.35 - (0.2 * overload_ratio))
 
-            lead_qty = int(round(qty * lead_ratio))
-            lead_qty = min(max(1, lead_qty), qty)
-            remain = qty - lead_qty
+            target_qty = int(round(qty * target_ratio))
+            target_qty = min(max(1, target_qty), qty)
+            remain = qty - target_qty
 
-            allocation[lead][denom] = allocation[lead].get(denom, 0) + lead_qty
-            station_load_counter[lead] += lead_qty
+            allocation[target][denom] = allocation[target].get(denom, 0) + target_qty
+            station_load_counter[target] += target_qty
 
             if remain > 0:
-                follower = ranked[0] if ranked[0] != lead else ranked[1]
-                allocation[follower][denom] = allocation[follower].get(denom, 0) + remain
-                station_load_counter[follower] += remain
+                followers = [sid for sid in ranked if sid != target]
+                if not followers:
+                    followers = [target]
+                for _ in range(remain):
+                    sid = min(followers, key=lambda c: station_load_counter[c])
+                    allocation[sid][denom] = allocation[sid].get(denom, 0) + 1
+                    station_load_counter[sid] += 1
             continue
 
         if alloc_mode == 'complement':
