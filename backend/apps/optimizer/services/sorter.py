@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+import random
 from typing import Dict, List, Sequence
 from uuid import uuid4
 
@@ -60,6 +61,7 @@ class SortingEngine:
         self.weights = self._load_weights()
         self.box_interval = self._load_float_config('固定上箱间隔', 2.0)
         self.max_iterations = int(self._load_float_config('最大迭代次数', 100))
+        self.max_restarts = int(self._load_float_config('最大重启次数', 5))
 
     def run(self, orders: Sequence[OrderAggregate]) -> RunResultSummary:
         base_sequence = sorted(orders, key=self._order_workload_seconds, reverse=True)
@@ -87,7 +89,7 @@ class SortingEngine:
         weights = {
             ParameterCategory.TOTAL_TIME_WEIGHT: 1.0,
             ParameterCategory.STATION_CONCENTRATION_WEIGHT: 0.2,
-            ParameterCategory.ROUTE_CONTINUITY_WEIGHT: 0.2,
+            ParameterCategory.ROUTE_CONTINUITY_WEIGHT: self._load_float_config('线路切换惩罚系数', 0.2),
         }
         rows = OptimizeModeParameter.objects.filter(mode=self.mode, enabled=True)
         for row in rows:
@@ -192,9 +194,20 @@ class SortingEngine:
         return switches
 
     def _local_search(self, base_sequence: List[OrderAggregate]) -> tuple[List[OrderAggregate], dict]:
-        best = list(base_sequence)
-        best_eval = self._evaluate(best)
+        best, best_eval = self._hill_climb(list(base_sequence))
+        rng = random.Random(42)
+        restarts = max(0, self.max_restarts)
+        for _ in range(restarts):
+            seed_sequence = list(base_sequence)
+            rng.shuffle(seed_sequence)
+            trial_best, trial_eval = self._hill_climb(seed_sequence)
+            if trial_eval['score'] < best_eval['score']:
+                best, best_eval = trial_best, trial_eval
+        return best, best_eval
 
+    def _hill_climb(self, sequence: List[OrderAggregate]) -> tuple[List[OrderAggregate], dict]:
+        best = list(sequence)
+        best_eval = self._evaluate(best)
         for _ in range(self.max_iterations):
             improved = False
             for i in range(len(best) - 1):
@@ -206,7 +219,6 @@ class SortingEngine:
                     improved = True
             if not improved:
                 break
-
         return best, best_eval
 
     @transaction.atomic
