@@ -36,8 +36,6 @@ services:
       DJANGO_SUPERUSER_PASSWORD: admin123
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app
 
   phpmyadmin:
     image: phpmyadmin:5.2
