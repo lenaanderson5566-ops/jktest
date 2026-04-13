@@ -208,6 +208,16 @@ def pipeline_overview_page(request, admin_site):
     })
 
 
-admin.site.register(StationDenominationSupport)
+@admin.register(StationDenominationSupport)
+class StationDenominationSupportAdmin(admin.ModelAdmin):
+    list_display = ('station_name', 'get_currency_type_display', 'denomination', 'enabled')
+    list_filter = ('currency_type', 'enabled')
+    search_fields = ('station__station_name', 'station__station_no')
+
+    @admin.display(description='工位名称')
+    def station_name(self, obj):
+        return obj.station.station_name
+
+
 admin.site.register(StationDenominationEfficiency)
 admin.site.register(TransferSegment)
