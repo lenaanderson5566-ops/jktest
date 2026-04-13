@@ -141,7 +141,7 @@ def _sequence_work_desc(boxes: list[BoxItem]) -> list[BoxItem]:
 
 def _sequence_line_cluster(boxes: list[BoxItem]) -> list[BoxItem]:
     blocks = _split_org_blocks(boxes)
-    blocks.sort(key=lambda block: (block[0].route_no, -sum(x.total_bundles for x in block)))
+    blocks.sort(key=lambda block: (block[0].route_no, block[0].organization_id, -sum(x.total_bundles for x in block)))
     return [x for block in blocks for x in block]
 
 
@@ -304,6 +304,7 @@ def _simulate(
     }
 
     continuity = round(1 - (route_switches / max(1, len(boxes) - 1)), 4)
+    route_cluster_score = round((len(boxes) - route_switches) / max(1, len(boxes)), 4)
 
     return {
         'total_finish_seconds': round(last_box_finish, 2),
@@ -312,6 +313,7 @@ def _simulate(
         'station_span_seconds': spans,
         'station_allocated_qty': {s.station_name: int(station_alloc_qty[s.id]) for s in stations},
         'line_continuity': continuity,
+        'route_cluster_score': route_cluster_score,
         'route_switches': route_switches,
     }
 
@@ -355,7 +357,14 @@ def _allocate_for_box(
         if alloc_mode in ('station_1', 'station_3'):
             preferred = [sid for sid in compatible if station_order_map.get(sid) == preferred_station_no]
             lead = preferred[0] if preferred else ranked[0]
-            lead_qty = int(round(qty * 0.8))
+
+            avg_load = sum(station_load_counter[sid] for sid in compatible) / max(1, len(compatible))
+            lead_load = station_load_counter[lead]
+            overload_ratio = max(0.0, (lead_load - avg_load) / max(1.0, avg_load))
+            # 集中导向但抑制目标工位过载，避免跨度被不必要拉长
+            lead_ratio = max(0.55, 0.8 - (0.25 * overload_ratio))
+
+            lead_qty = int(round(qty * lead_ratio))
             lead_qty = min(max(1, lead_qty), qty)
             remain = qty - lead_qty
 
