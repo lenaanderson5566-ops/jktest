@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 import logging
 import random
@@ -68,6 +68,7 @@ class SortingEngine:
         'MAX_ITERATIONS': 'MAX_ITERATIONS',
         'MAX_RESTARTS': 'MAX_RESTARTS',
         'TRACE_ENABLED': 'SORT_TRACE_ENABLED',
+        'SCHEDULE_START_TIME': 'SCHEDULE_START_TIME',
     }
 
     def __init__(self, mode: OptimizeMode):
@@ -80,6 +81,7 @@ class SortingEngine:
         self.max_iterations = max(2, int(self._load_float_config(self.CONFIG_KEYS['MAX_ITERATIONS'], default=100)))
         self.max_restarts = max(1, int(self._load_float_config(self.CONFIG_KEYS['MAX_RESTARTS'], default=5)))
         self.trace_enabled = bool(int(self._load_float_config(self.CONFIG_KEYS['TRACE_ENABLED'], default=0)))
+        self.schedule_start_time = self._load_time_config(self.CONFIG_KEYS['SCHEDULE_START_TIME'], default=time(hour=8, minute=0))
         self.eval_count = 0
 
     def run(self, boxes: Sequence[PipelineBoxAggregate]) -> RunResultSummary:
@@ -140,6 +142,19 @@ class SortingEngine:
             return float(row.config_value)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _load_time_config(key: str, default: time) -> time:
+        row = GlobalConfig.objects.filter(config_key=key, enabled=True).first()
+        if not row:
+            return default
+        value = str(row.config_value or '').strip()
+        for fmt in ('%H:%M:%S', '%H:%M'):
+            try:
+                return datetime.strptime(value, fmt).time()
+            except ValueError:
+                continue
+        return default
 
     def _box_workload_seconds(self, box: PipelineBoxAggregate) -> float:
         return sum(self._box_station_process_seconds(box, station) for station in self.stations)
@@ -333,7 +348,7 @@ class SortingEngine:
             )[:255],
         )
 
-        base_dt = summary.run_at
+        base_dt = self._resolve_schedule_base_datetime(sequence) or summary.run_at
         for index, (order, start_seconds, finish_seconds) in enumerate(evaluation['timings'], start=1):
             start_seconds = round(start_seconds, 2)
             finish_seconds = round(finish_seconds, 2)
@@ -352,6 +367,14 @@ class SortingEngine:
             )
 
         return summary
+
+    def _resolve_schedule_base_datetime(self, sequence: Sequence[PipelineBoxAggregate]):
+        if not sequence:
+            return None
+        order_date = sequence[0].order_date
+        base_naive = datetime.combine(order_date, self.schedule_start_time)
+        tz = timezone.get_current_timezone()
+        return timezone.make_aware(base_naive, tz)
 
 
 def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSummary:
