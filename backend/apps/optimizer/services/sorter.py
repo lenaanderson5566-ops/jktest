@@ -81,6 +81,8 @@ class SortingEngine:
         'MAX_RESTARTS': 'MAX_RESTARTS',
         'TRACE_ENABLED': 'SORT_TRACE_ENABLED',
         'SCHEDULE_START_TIME': 'SCHEDULE_START_TIME',
+        'ADJ_COMPLEMENT_WEIGHT': 'ADJ_COMPLEMENT_WEIGHT',
+        'T12_SMOOTH_WEIGHT': 'T12_SMOOTH_WEIGHT',
     }
 
     def __init__(self, mode: OptimizeMode):
@@ -95,6 +97,8 @@ class SortingEngine:
         self.max_restarts = max(1, int(self._load_float_config(self.CONFIG_KEYS['MAX_RESTARTS'], default=5)))
         self.trace_enabled = bool(int(self._load_float_config(self.CONFIG_KEYS['TRACE_ENABLED'], default=0)))
         self.schedule_start_time = self._load_time_config(self.CONFIG_KEYS['SCHEDULE_START_TIME'], default=time(hour=8, minute=0))
+        self.adj_complement_weight = self._load_float_config(self.CONFIG_KEYS['ADJ_COMPLEMENT_WEIGHT'], default=0.15)
+        self.t12_smooth_weight = self._load_float_config(self.CONFIG_KEYS['T12_SMOOTH_WEIGHT'], default=0.05)
         self.eval_count = 0
 
     def run(self, boxes: Sequence[PipelineBoxAggregate]) -> RunResultSummary:
@@ -255,11 +259,15 @@ class SortingEngine:
         concentration = self._station_concentration_penalty(station_metrics)
         route_switch = self._route_switch_count(sequence)
         route_switch_penalty = self.weights[ParameterCategory.ROUTE_CONTINUITY_WEIGHT] * route_switch
+        adjacent_complement_penalty = self._adjacent_complement_penalty(sequence)
+        t12_smooth_penalty = self._adjacent_t12_smooth_penalty(sequence)
 
         score = (
             self.weights[ParameterCategory.TOTAL_TIME_WEIGHT] * total_seconds
             + concentration
             + route_switch_penalty
+            + adjacent_complement_penalty
+            + t12_smooth_penalty
         )
 
         return {
@@ -268,6 +276,8 @@ class SortingEngine:
             'concentration_penalty': concentration,
             'route_switch_count': route_switch,
             'route_switch_penalty': route_switch_penalty,
+            'adjacent_complement_penalty': adjacent_complement_penalty,
+            't12_smooth_penalty': t12_smooth_penalty,
             'station_metrics': station_metrics,
             'timings': order_timings,
         }
@@ -280,6 +290,43 @@ class SortingEngine:
             return penalty
         concentration = max((m.span_seconds for m in station_metrics.values()), default=0.0)
         return self.weights[ParameterCategory.STATION_CONCENTRATION_WEIGHT] * concentration
+
+
+    def _front_two_station_times(self, box: PipelineBoxAggregate) -> tuple[float, float]:
+        if not self.stations:
+            return 0.0, 0.0
+        t1 = self._box_station_process_seconds(box, self.stations[0])
+        t2 = self._box_station_process_seconds(box, self.stations[1]) if len(self.stations) > 1 else 0.0
+        return t1, t2
+
+    def _adjacent_complement_penalty(self, sequence: Sequence[PipelineBoxAggregate]) -> float:
+        if len(sequence) < 2 or self.adj_complement_weight <= 0:
+            return 0.0
+        penalty = 0.0
+        for left, right in zip(sequence, sequence[1:]):
+            left_t1, left_t2 = self._front_two_station_times(left)
+            right_t1, right_t2 = self._front_two_station_times(right)
+            left_balance = left_t1 - left_t2
+            right_balance = right_t1 - right_t2
+            # 越接近相反数越互补；若同号且都偏向同一工位，额外惩罚。
+            pair_penalty = abs(left_balance + right_balance)
+            if left_balance * right_balance > 0:
+                pair_penalty += min(abs(left_balance), abs(right_balance))
+            penalty += pair_penalty
+        return self.adj_complement_weight * penalty
+
+    def _adjacent_t12_smooth_penalty(self, sequence: Sequence[PipelineBoxAggregate]) -> float:
+        if len(sequence) < 2 or self.t12_smooth_weight <= 0:
+            return 0.0
+        penalty = 0.0
+        prev_t12 = None
+        for box in sequence:
+            t1, t2 = self._front_two_station_times(box)
+            t12 = t1 + t2
+            if prev_t12 is not None:
+                penalty += abs(prev_t12 - t12)
+            prev_t12 = t12
+        return self.t12_smooth_weight * penalty
 
     @staticmethod
     def _route_switch_count(sequence: Sequence[PipelineBoxAggregate]) -> int:
@@ -339,11 +386,15 @@ class SortingEngine:
             return False
         left_tuple = (
             left.get('concentration_penalty', 0.0),
+            left.get('adjacent_complement_penalty', 0.0),
+            left.get('t12_smooth_penalty', 0.0),
             left.get('route_switch_count', 0),
             left.get('total_seconds', 0.0),
         )
         right_tuple = (
             right.get('concentration_penalty', 0.0),
+            right.get('adjacent_complement_penalty', 0.0),
+            right.get('t12_smooth_penalty', 0.0),
             right.get('route_switch_count', 0),
             right.get('total_seconds', 0.0),
         )
@@ -381,6 +432,8 @@ class SortingEngine:
                 f'eval_count={self.eval_count}; max_iterations={self.max_iterations}; max_restarts={self.max_restarts}; '
                 f'total_w={self.weights.get(ParameterCategory.TOTAL_TIME_WEIGHT, 0)}; '
                 f'route_w={self.weights.get(ParameterCategory.ROUTE_CONTINUITY_WEIGHT, 0)}; '
+                f'adj_w={self.adj_complement_weight}; '
+                f't12_w={self.t12_smooth_weight}; '
                 f'station_focus={len(self.station_focus_weights)}'
             )[:255],
         )
