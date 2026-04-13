@@ -5,9 +5,7 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
     initial = True
 
-    dependencies = [
-        ('masterdata', '__first__'),
-    ]
+    dependencies = []
 
     operations = [
         migrations.CreateModel(
