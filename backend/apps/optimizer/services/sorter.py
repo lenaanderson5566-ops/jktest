@@ -345,7 +345,7 @@ class SortingEngine:
                 final_position=index,
                 est_start_time=base_dt + timedelta(seconds=start_seconds),
                 est_finish_time=base_dt + timedelta(seconds=finish_seconds),
-                est_total_seconds=Decimal(str(round(finish_seconds - start_seconds, 2))),
+                est_total_seconds=Decimal(str(round(finish_seconds, 2))),
                 remark=f'按箱排序-原箱序号:{order.source_box_seq_no}',
             )
 
