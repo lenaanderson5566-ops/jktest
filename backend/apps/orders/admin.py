@@ -34,6 +34,18 @@ DENOMINATION_TO_FIELD = {
 }
 
 FIELD_TO_DENOMINATION = {v: k for k, v in DENOMINATION_TO_FIELD.items()}
+DENOMINATION_LABEL_MAP = {
+    '100': '100元捆数',
+    '50': '50元捆数',
+    '20': '20元捆数',
+    '10': '10元捆数',
+    '5': '5元捆数',
+    '1': '1元包数',
+    '0.5': '0.5元包数',
+    '0.1': '0.1元包数',
+}
+DEFAULT_ADMIN_FIELDS = ('order_no', 'order_date', 'organization', 'route')
+TAIL_ADMIN_FIELDS = ('status', 'remark')
 
 
 @admin.register(OrganizationOrder)
@@ -42,6 +54,13 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
     list_display = ('order_no', 'order_date', 'organization', 'route', 'status')
     search_fields = ('order_no', 'organization__org_no', 'organization__org_name')
     list_filter = ('order_date', 'route', 'status')
+
+    def get_fields(self, request, obj=None):
+        configured_denominations = _get_configured_denominations()
+        qty_fields = [DENOMINATION_TO_FIELD[denom] for denom in configured_denominations]
+        if not qty_fields:
+            qty_fields = list(DENOMINATION_TO_FIELD.values())
+        return [*DEFAULT_ADMIN_FIELDS, *qty_fields, *TAIL_ADMIN_FIELDS]
 
     def get_urls(self):
         urls = super().get_urls()
@@ -265,3 +284,68 @@ def _normalize_denomination(value) -> str:
     d = Decimal(str(value)).normalize()
     txt = format(d, 'f').rstrip('0').rstrip('.')
     return txt if txt else '0'
+
+
+def _get_configured_denominations() -> list[str]:
+    spec_denoms = {
+        _normalize_denomination(spec.denomination)
+        for spec in DenominationPackagingSpec.objects.filter(enabled=True)
+    }
+    support_denoms = {
+        _normalize_denomination(support.denomination)
+        for support in StationDenominationSupport.objects.filter(enabled=True)
+    }
+    configured = spec_denoms & support_denoms
+    return [denom for denom in DENOMINATION_TO_FIELD if denom in configured]
+
+
+def _validate_denomination_bound(denom_text: str):
+    denomination = Decimal(denom_text)
+    currency_type = CurrencyType.COIN if denomination < Decimal('5') else CurrencyType.BANKNOTE
+    spec_exists = DenominationPackagingSpec.objects.filter(
+        currency_type=currency_type,
+        denomination=denomination,
+        enabled=True,
+    ).exists()
+    support_exists = StationDenominationSupport.objects.filter(
+        currency_type=currency_type,
+        denomination=denomination,
+        enabled=True,
+    ).exists()
+    if not spec_exists or not support_exists:
+        missing_parts = []
+        if not spec_exists:
+            missing_parts.append('面额封装规格')
+        if not support_exists:
+            missing_parts.append('工位支持面额')
+        raise ValueError(f'面额 {DENOMINATION_LABEL_MAP.get(denom_text, denom_text)} 未完成绑定：缺少{"、".join(missing_parts)}配置')
+
+
+def _resolve_quantity_from_row(denom_text: str, qty_raw, amount_raw) -> int:
+    if qty_raw not in (None, ''):
+        return int(qty_raw)
+    if amount_raw in (None, ''):
+        raise ValueError(f'面额 {DENOMINATION_LABEL_MAP.get(denom_text, denom_text)} 未填写数量或金额')
+
+    denomination = Decimal(denom_text)
+    currency_type = CurrencyType.COIN if denomination < Decimal('5') else CurrencyType.BANKNOTE
+    spec = DenominationPackagingSpec.objects.filter(
+        currency_type=currency_type,
+        denomination=denomination,
+        enabled=True,
+    ).first()
+    if not spec:
+        raise ValueError(f'面额 {DENOMINATION_LABEL_MAP.get(denom_text, denom_text)} 缺少启用的面额封装规格')
+
+    units = int(spec.units_per_package)
+    if units <= 0:
+        raise ValueError(f'面额 {DENOMINATION_LABEL_MAP.get(denom_text, denom_text)} 封装规格单位必须大于0')
+
+    amount = Decimal(str(amount_raw))
+    qty = amount / (denomination * units)
+    if qty != qty.to_integral_value():
+        raise ValueError(
+            f'面额 {DENOMINATION_LABEL_MAP.get(denom_text, denom_text)} 金额 {amount_raw} '
+            f'不能按每包(捆){units}张(枚)整除换算为整数包(捆)数'
+        )
+    return int(qty)
