@@ -58,6 +58,7 @@ def build_strategy_comparison(include_details: bool = False) -> dict:
 
     station_order_map = {s.id: idx for idx, s in enumerate(stations, start=1)}
     entry_interval = _float_config('BOX_ENTRY_INTERVAL_SECONDS', 5.0)
+    station_switch_interval = _float_config('STATION_SWITCH_INTERVAL_SECONDS', 0.5)
 
     strategies: list[tuple[str, str, Callable[[list[BoxItem]], list[BoxItem]], str]] = [
         ('joint_opt', '联合优化方案', lambda rows: _sequence_joint_opt(rows, support_map, station_order_map), 'balanced'),
@@ -73,7 +74,7 @@ def build_strategy_comparison(include_details: bool = False) -> dict:
     results: list[StrategyResult] = []
     for key, name, seq_fn, alloc_mode in strategies:
         sequenced = seq_fn(boxes)
-        metrics = _simulate(sequenced, stations, transfer_map, support_map, eff_map, alloc_mode, station_order_map, entry_interval, collect_details=include_details)
+        metrics = _simulate(sequenced, stations, transfer_map, support_map, eff_map, alloc_mode, station_order_map, entry_interval, station_switch_interval, collect_details=include_details)
         metrics['sequence_preview'] = [f"{b.organization_name}-{b.seq_no}" for b in sequenced[:8]]
         results.append(StrategyResult(key=key, name=name, metrics=metrics))
 
@@ -235,6 +236,7 @@ def _simulate(
     alloc_mode: str,
     station_order_map: dict[int, int],
     box_entry_interval: float,
+    station_switch_interval: float,
     collect_details: bool = False,
 ) -> dict:
     if not boxes:
@@ -280,7 +282,10 @@ def _simulate(
                 continue
 
             transfer_time = transfer_map.get((prev_station_id, station_id), 0.0) if prev_station_id else 0.0
-            start_time = max(station_available[station_id], prev_finish + transfer_time, release_time)
+            station_ready = station_available[station_id]
+            if station_first_start[station_id] is not None:
+                station_ready += station_switch_interval
+            start_time = max(station_ready, prev_finish + transfer_time, release_time)
             proc_time = float(station.fixed_boxing_seconds)
             for denom, qty in quantities.items():
                 unit_time = eff_map.get((station_id, denom), float(station.unit_boxing_seconds))
@@ -343,6 +348,7 @@ def _simulate(
         'line_continuity': continuity,
         'route_cluster_score': route_cluster_score,
         'route_switches': route_switches,
+        'station_switch_interval_seconds': station_switch_interval,
         'box_details': box_details if collect_details else [],
     }
 

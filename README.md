@@ -90,6 +90,7 @@ docker compose exec web python manage.py migrate
   - `MANUAL_PACK_THRESHOLD`（走人工捆数阈值）
   - `PIPELINE_BOX_CAPACITY`（流水线单箱捆数上限）
   - `BOX_ENTRY_INTERVAL_SECONDS`（流水线上箱时间间隔，默认5秒）
+  - `STATION_SWITCH_INTERVAL_SECONDS`（同工位相邻箱切换间隔，默认0.5秒）
   - 流水线单箱捆数上限对同一订单下所有纸币面额共用，不按单个面额单独计算
 
 主数据中可维护“面额封装规格”（如100元=1000张/捆，1元=500枚/包），机构订单长表导入支持填写“金额”，系统会按规格自动换算包/捆数。
