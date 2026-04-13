@@ -45,16 +45,18 @@ class RunResultStationDetailAdmin(admin.ModelAdmin):
 class SortedOrderResultAdmin(admin.ModelAdmin):
     list_display = (
         'seq_no',
+        'final_position',
+        'sort_change',
         'order_date',
         'batch_link',
+        'order',
         'organization',
         'route',
-        'final_position',
         'est_total_seconds',
         'est_start_time',
         'est_finish_time',
     )
-    list_filter = ('order_date', 'batch__optimize_mode', 'route')
+    list_filter = ('order_date', 'batch__optimize_mode', 'route', 'batch')
     search_fields = (
         'batch__batch_no',
         'order__order_no',
@@ -69,3 +71,12 @@ class SortedOrderResultAdmin(admin.ModelAdmin):
     def batch_link(self, obj):
         url = reverse('admin:runs_runresultsummary_change', args=[obj.batch_id])
         return format_html('<a href="{}">{}</a>', url, obj.batch.batch_no)
+
+    @admin.display(description='排序变化')
+    def sort_change(self, obj):
+        delta = obj.seq_no - obj.final_position
+        if delta > 0:
+            return f'↑提前 {delta} 位'
+        if delta < 0:
+            return f'↓延后 {abs(delta)} 位'
+        return '→不变'
