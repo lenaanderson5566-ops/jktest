@@ -10,6 +10,16 @@ DROP TABLE IF EXISTS optimize_mode_parameter;
 DROP TABLE IF EXISTS optimize_mode;
 """
 
+CREATE_GLOBAL_CONFIG_IF_NOT_EXISTS_SQL = """
+CREATE TABLE IF NOT EXISTS global_config (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    config_key VARCHAR(64) NOT NULL UNIQUE,
+    config_value VARCHAR(255) NOT NULL,
+    enabled BOOL NOT NULL DEFAULT TRUE,
+    remark VARCHAR(255) NOT NULL DEFAULT ''
+);
+"""
+
 
 def seed_global_configs(apps, schema_editor):
     GlobalConfig = apps.get_model('masterdata', 'GlobalConfig')
@@ -43,20 +53,30 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
-            name='GlobalConfig',
-            fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('config_key', models.CharField(max_length=64, unique=True, verbose_name='配置项名称')),
-                ('config_value', models.CharField(max_length=255, verbose_name='配置项值')),
-                ('enabled', models.BooleanField(default=True, verbose_name='是否启用')),
-                ('remark', models.CharField(blank=True, max_length=255, verbose_name='备注')),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql=CREATE_GLOBAL_CONFIG_IF_NOT_EXISTS_SQL,
+                    reverse_sql=migrations.RunSQL.noop,
+                ),
             ],
-            options={
-                'db_table': 'global_config',
-                'verbose_name': '全局配置',
-                'verbose_name_plural': '全局配置',
-            },
+            state_operations=[
+                migrations.CreateModel(
+                    name='GlobalConfig',
+                    fields=[
+                        ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                        ('config_key', models.CharField(max_length=64, unique=True, verbose_name='配置项名称')),
+                        ('config_value', models.CharField(max_length=255, verbose_name='配置项值')),
+                        ('enabled', models.BooleanField(default=True, verbose_name='是否启用')),
+                        ('remark', models.CharField(blank=True, max_length=255, verbose_name='备注')),
+                    ],
+                    options={
+                        'db_table': 'global_config',
+                        'verbose_name': '全局配置',
+                        'verbose_name_plural': '全局配置',
+                    },
+                ),
+            ],
         ),
         migrations.RunSQL(sql=OBSOLETE_TABLES_SQL, reverse_sql=migrations.RunSQL.noop),
         migrations.RunPython(seed_global_configs, unseed_global_configs),
