@@ -56,6 +56,12 @@ class ManualPackTaskAdmin(admin.ModelAdmin):
     list_filter = ('order__order_date', 'order__organization', 'order__denomination')
     search_fields = ('order__order_no', 'order__organization__org_no', 'order__organization__org_name')
 
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
     def get_queryset(self, request):
         return ManualPackTask.objects.select_related('order', 'order__organization')
 
@@ -120,6 +126,12 @@ class PipelineBoxTaskAdmin(admin.ModelAdmin):
     list_display = ('order_no', 'order_date', 'organization_no', 'route_no', 'denomination', 'seq_no', 'bundle_count')
     list_filter = ('order__order_date', 'order__route', 'order__organization', 'order__denomination')
     search_fields = ('order__order_no', 'order__organization__org_no', 'order__route__route_no')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
     def get_queryset(self, request):
         return PipelineBoxTask.objects.select_related('order', 'order__organization', 'order__route')
