@@ -282,7 +282,9 @@ def _to_date(value) -> date:
 
 def _normalize_denomination(value) -> str:
     d = Decimal(str(value)).normalize()
-    txt = format(d, 'f').rstrip('0').rstrip('.')
+    txt = format(d, 'f')
+    if '.' in txt:
+        txt = txt.rstrip('0').rstrip('.')
     return txt if txt else '0'
 
 
