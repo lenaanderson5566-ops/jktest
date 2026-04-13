@@ -294,7 +294,13 @@ class SortingEngine:
             total_seconds=Decimal(str(round(evaluation['total_seconds'], 2))),
             score=Decimal(str(round(evaluation['score'], 4))),
             is_best=True,
-            remark=f'自动排序计算结果; eval_count={self.eval_count}; max_iterations={self.max_iterations}; max_restarts={self.max_restarts}',
+            remark=(
+                '自动排序计算结果; '
+                f'eval_count={self.eval_count}; max_iterations={self.max_iterations}; max_restarts={self.max_restarts}; '
+                f'total_w={self.weights.get(ParameterCategory.TOTAL_TIME_WEIGHT, 0)}; '
+                f'route_w={self.weights.get(ParameterCategory.ROUTE_CONTINUITY_WEIGHT, 0)}; '
+                f'station_focus={len(self.station_focus_weights)}'
+            )[:255],
         )
 
         base_dt = timezone.now()
