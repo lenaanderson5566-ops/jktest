@@ -13,7 +13,23 @@ from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
 from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, Organization, TransportRoute
-from .models import OrderStatus, OrganizationOrder
+from .models import OrderImportBatch, OrderStatus, OrganizationOrder
+
+
+class OrganizationOrderInline(admin.TabularInline):
+    model = OrganizationOrder
+    extra = 0
+    fields = ('line_no', 'organization', 'route', 'currency_type', 'denomination', 'quantity', 'status', 'remark')
+    readonly_fields = fields
+    can_delete = False
+
+
+@admin.register(OrderImportBatch)
+class OrderImportBatchAdmin(admin.ModelAdmin):
+    list_display = ('order_no', 'order_date', 'source_filename', 'total_rows', 'created_at')
+    search_fields = ('order_no', 'source_filename')
+    list_filter = ('order_date', 'created_at')
+    inlines = [OrganizationOrderInline]
 
 
 @admin.register(OrganizationOrder)
@@ -45,14 +61,14 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         if request.method == 'POST' and request.FILES.get('file'):
             try:
                 self._import_long(request.FILES['file'])
-                messages.success(request, '机构订单长表导入成功')
+                messages.success(request, '订单导入长表导入成功')
             except Exception as exc:  # noqa: BLE001
-                messages.error(request, f'机构订单导入失败: {exc}')
+                messages.error(request, f'订单导入失败: {exc}')
             return redirect('..')
 
         token = get_token(request)
         return HttpResponse(
-            '<h3>机构订单 Excel 导入（长表）</h3>'
+            '<h3>订单导入 Excel 导入（长表）</h3>'
             '<form method="post" enctype="multipart/form-data">'
             f'<input type="hidden" name="csrfmiddlewaretoken" value="{token}" />'
             '<input type="file" name="file" accept=".xlsx" required />'
@@ -71,6 +87,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
             raise ValueError('请使用系统提供的长表模板导入')
 
         batch_order_date = None
+        details: list[dict] = []
         for row_no, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             try:
                 if not row:
@@ -92,37 +109,60 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
                 if not route:
                     raise ValueError(f'找不到线路号: {route_no}')
 
-                order_no = _system_order_no(order_date)
-
                 denom = Decimal(_normalize_denomination(row[idx['面额']]))
                 currency_type = CurrencyType.COIN if denom < Decimal('5') else CurrencyType.BANKNOTE
                 qty = _resolve_quantity_from_row(str(denom), row[idx.get('数量')] if idx.get('数量') is not None else None,
                                                  row[idx.get('金额')] if idx.get('金额') is not None else None)
                 remark = str(row[idx.get('备注')] or '').strip() if idx.get('备注') is not None else ''
-
-                try:
-                    OrganizationOrder.objects.update_or_create(
-                        order_no=order_no,
-                        order_date=order_date,
-                        organization=org,
-                        route=route,
-                        currency_type=currency_type,
-                        denomination=denom,
-                        defaults={
-                            'quantity': qty,
-                            'status': OrderStatus.NEW,
-                            'remark': remark,
-                        },
-                    )
-                except IntegrityError as exc:
-                    if 'organization_order_order_no_currency_type' in str(exc):
-                        raise ValueError(
-                            '检测到旧版唯一索引(order_no+currency_type+denomination)。'
-                            '请先执行数据库迁移: python manage.py migrate orders 0002'
-                        ) from exc
-                    raise
+                details.append(
+                    {
+                        'line_no': row_no,
+                        'order_date': order_date,
+                        'organization': org,
+                        'route': route,
+                        'currency_type': currency_type,
+                        'denomination': denom,
+                        'quantity': qty,
+                        'status': OrderStatus.NEW,
+                        'remark': remark,
+                    }
+                )
             except Exception as exc:  # noqa: BLE001
                 raise ValueError(f'长表第{row_no}行导入失败：{exc}') from exc
+
+        if not details:
+            raise ValueError('未解析到可导入的订单明细')
+
+        order_date = details[0]['order_date']
+        order_no = _next_order_no(order_date)
+        batch = OrderImportBatch.objects.create(
+            order_no=order_no,
+            order_date=order_date,
+            source_filename=getattr(file_obj, 'name', ''),
+            total_rows=len(details),
+        )
+        for detail in details:
+            try:
+                OrganizationOrder.objects.create(
+                    import_batch=batch,
+                    line_no=detail['line_no'],
+                    order_no=order_no,
+                    order_date=detail['order_date'],
+                    organization=detail['organization'],
+                    route=detail['route'],
+                    currency_type=detail['currency_type'],
+                    denomination=detail['denomination'],
+                    quantity=detail['quantity'],
+                    status=OrderStatus.NEW,
+                    remark=detail['remark'],
+                )
+            except IntegrityError as exc:
+                if 'organization_order_order_no_currency_type' in str(exc):
+                    raise ValueError(
+                        '检测到旧版唯一索引(order_no+currency_type+denomination)。'
+                        '请先执行数据库迁移: python manage.py migrate orders 0002'
+                    ) from exc
+                raise
 
     def export_excel(self, request):
         wb = Workbook()
@@ -212,5 +252,12 @@ def _to_decimal(value) -> Decimal:
     return Decimal(normalized)
 
 
-def _system_order_no(order_date: date) -> str:
-    return f'ORD{order_date.strftime("%Y%m%d")}'
+def _next_order_no(order_date: date) -> str:
+    date_prefix = order_date.strftime('%Y%m%d')
+    prefix = f'ORD{date_prefix}-'
+    max_no = 0
+    for order_no in OrderImportBatch.objects.filter(order_no__startswith=prefix).values_list('order_no', flat=True):
+        suffix = order_no.replace(prefix, '', 1)
+        if suffix.isdigit():
+            max_no = max(max_no, int(suffix))
+    return f'{prefix}{max_no + 1:03d}'

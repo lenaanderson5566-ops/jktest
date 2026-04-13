@@ -21,6 +21,8 @@ class OrderStatus(models.TextChoices):
 
 
 class OrganizationOrder(models.Model):
+    import_batch = models.ForeignKey('OrderImportBatch', on_delete=models.CASCADE, related_name='details', verbose_name='导入批次', null=True, blank=True)
+    line_no = models.PositiveIntegerField('行号', default=0)
     order_no = models.CharField('订单编号', max_length=64)
     order_date = models.DateField('订单日期')
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT, related_name='orders', verbose_name='机构')
@@ -33,9 +35,9 @@ class OrganizationOrder(models.Model):
 
     class Meta:
         db_table = 'organization_order'
-        verbose_name = '机构订单'
+        verbose_name = '订单导入'
         verbose_name_plural = verbose_name
-        unique_together = ('order_no', 'order_date', 'organization', 'route', 'currency_type', 'denomination')
+        unique_together = ('import_batch', 'line_no')
         indexes = [
             models.Index(fields=['order_date', 'route'], name='organizatio_order_d_f8e7bc_idx'),
             models.Index(fields=['status'], name='organizatio_status_803f99_idx'),
@@ -71,3 +73,20 @@ def _validate_denomination_binding(denom_text: str, currency_type: str):
             f"{'、' if (not spec_exists and not support_exists) else ''}"
             f"{'工位支持面额' if not support_exists else ''}。"
         )
+
+
+class OrderImportBatch(models.Model):
+    order_no = models.CharField('订单编号', max_length=64, unique=True)
+    order_date = models.DateField('订单日期')
+    source_filename = models.CharField('来源文件名', max_length=255, blank=True)
+    total_rows = models.PositiveIntegerField('导入行数', default=0)
+    created_at = models.DateTimeField('导入时间', auto_now_add=True)
+
+    class Meta:
+        db_table = 'order_import_batch'
+        verbose_name = '订单管理'
+        verbose_name_plural = verbose_name
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return self.order_no
