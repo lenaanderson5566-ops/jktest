@@ -57,17 +57,27 @@ class PipelineBoxAggregate:
 class SortingEngine:
     """流水线排序计算引擎。"""
 
+    CONFIG_KEYS = {
+        'DEFAULT_MODE_NO': ('DEFAULT_OPTIMIZE_MODE_NO', '默认优化模式编号'),
+        'ROUTE_SWITCH_PENALTY': ('ROUTE_SWITCH_PENALTY', '线路切换惩罚系数'),
+        'BOX_INTERVAL': ('BOX_INTERVAL_SECONDS', '固定上箱间隔'),
+        'MAX_ITERATIONS': ('MAX_ITERATIONS', '最大迭代次数'),
+        'MAX_RESTARTS': ('MAX_RESTARTS', '最大重启次数'),
+    }
+
     def __init__(self, mode: OptimizeMode):
         self.mode = mode
         self.stations = list(PackingStation.objects.filter(enabled=True).order_by('station_order'))
         self.transfer_map = self._build_transfer_map()
         self.efficiency_map = self._build_efficiency_map()
         self.weights = self._load_weights()
-        self.box_interval = self._load_float_config('固定上箱间隔', 2.0)
-        self.max_iterations = max(2, int(self._load_float_config('最大迭代次数', 100)))
-        self.max_restarts = max(1, int(self._load_float_config('最大重启次数', 5)))
+        self.box_interval = self._load_float_config(*self.CONFIG_KEYS['BOX_INTERVAL'], default=2.0)
+        self.max_iterations = max(2, int(self._load_float_config(*self.CONFIG_KEYS['MAX_ITERATIONS'], default=100)))
+        self.max_restarts = max(1, int(self._load_float_config(*self.CONFIG_KEYS['MAX_RESTARTS'], default=5)))
+        self.eval_count = 0
 
     def run(self, boxes: Sequence[PipelineBoxAggregate]) -> RunResultSummary:
+        self.eval_count = 0
         base_sequence = sorted(boxes, key=self._box_workload_seconds, reverse=True)
         best_sequence, best_eval = self._local_search(base_sequence)
         best_sequence = self._enforce_organization_continuity(best_sequence)
@@ -95,22 +105,28 @@ class SortingEngine:
         weights = {
             ParameterCategory.TOTAL_TIME_WEIGHT: 1.0,
             ParameterCategory.STATION_CONCENTRATION_WEIGHT: 0.2,
-            ParameterCategory.ROUTE_CONTINUITY_WEIGHT: self._load_float_config('线路切换惩罚系数', 0.2),
+            ParameterCategory.ROUTE_CONTINUITY_WEIGHT: self._load_float_config(*self.CONFIG_KEYS['ROUTE_SWITCH_PENALTY'], default=0.2),
         }
+        self.station_focus_weights: Dict[int, float] = {}
         rows = OptimizeModeParameter.objects.filter(mode=self.mode, enabled=True)
         for row in rows:
+            if row.category == ParameterCategory.STATION_CONCENTRATION_WEIGHT and row.station_id:
+                self.station_focus_weights[row.station_id] = float(row.value)
+                continue
             weights[row.category] = float(row.value)
         return weights
 
     @staticmethod
-    def _load_float_config(key: str, default: float) -> float:
-        row = GlobalConfig.objects.filter(config_key=key, enabled=True).first()
-        if not row:
-            return default
-        try:
-            return float(row.config_value)
-        except (TypeError, ValueError):
-            return default
+    def _load_float_config(*keys: str, default: float) -> float:
+        for key in keys:
+            row = GlobalConfig.objects.filter(config_key=key, enabled=True).first()
+            if not row:
+                continue
+            try:
+                return float(row.config_value)
+            except (TypeError, ValueError):
+                continue
+        return default
 
     def _box_workload_seconds(self, box: PipelineBoxAggregate) -> float:
         return sum(self._box_station_process_seconds(box, station) for station in self.stations)
@@ -129,6 +145,7 @@ class SortingEngine:
         return duration + float(batches) * unit_seconds
 
     def _evaluate(self, sequence: Sequence[PipelineBoxAggregate]) -> dict:
+        self.eval_count += 1
         station_available = {station.id: 0.0 for station in self.stations}
         station_metrics = {station.id: StationMetrics() for station in self.stations}
         last_upbox_ready = 0.0
@@ -170,12 +187,12 @@ class SortingEngine:
             order_timings.append((order, order_start or 0.0, order_finish))
 
         total_seconds = max(station_available.values(), default=0.0)
-        concentration = max((m.span_seconds for m in station_metrics.values()), default=0.0)
+        concentration = self._station_concentration_penalty(station_metrics)
         route_switch = self._route_switch_count(sequence)
 
         score = (
             self.weights[ParameterCategory.TOTAL_TIME_WEIGHT] * total_seconds
-            + self.weights[ParameterCategory.STATION_CONCENTRATION_WEIGHT] * concentration
+            + concentration
             + self.weights[ParameterCategory.ROUTE_CONTINUITY_WEIGHT] * route_switch
         )
 
@@ -185,6 +202,15 @@ class SortingEngine:
             'station_metrics': station_metrics,
             'timings': order_timings,
         }
+
+    def _station_concentration_penalty(self, station_metrics: Dict[int, StationMetrics]) -> float:
+        if self.station_focus_weights:
+            penalty = 0.0
+            for station_id, weight in self.station_focus_weights.items():
+                penalty += weight * station_metrics.get(station_id, StationMetrics()).span_seconds
+            return penalty
+        concentration = max((m.span_seconds for m in station_metrics.values()), default=0.0)
+        return self.weights[ParameterCategory.STATION_CONCENTRATION_WEIGHT] * concentration
 
     @staticmethod
     def _route_switch_count(sequence: Sequence[PipelineBoxAggregate]) -> int:
@@ -247,7 +273,7 @@ class SortingEngine:
             total_seconds=Decimal(str(round(evaluation['total_seconds'], 2))),
             score=Decimal(str(round(evaluation['score'], 4))),
             is_best=True,
-            remark='自动排序计算结果',
+            remark=f'自动排序计算结果; eval_count={self.eval_count}; max_iterations={self.max_iterations}; max_restarts={self.max_restarts}',
         )
 
         base_dt = timezone.now()
@@ -276,7 +302,11 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
     if mode_no:
         mode = OptimizeMode.objects.filter(mode_no=mode_no, enabled=True).first()
     if mode is None:
-        default_mode_no = GlobalConfig.objects.filter(config_key='默认优化模式编号', enabled=True).values_list('config_value', flat=True).first()
+        default_mode_no = None
+        for key in SortingEngine.CONFIG_KEYS['DEFAULT_MODE_NO']:
+            default_mode_no = GlobalConfig.objects.filter(config_key=key, enabled=True).values_list('config_value', flat=True).first()
+            if default_mode_no:
+                break
         if default_mode_no:
             mode = OptimizeMode.objects.filter(mode_no=default_mode_no, enabled=True).first()
     if mode is None:
