@@ -38,6 +38,7 @@
   </table>
 
   <h3 style="margin-top:20px;">装箱排序与分配方案对比（仿真）</h3>
+  <p style="color:#666;">说明：若某些面额仅有一个兼容工位，则不同策略在该面额上的分配会天然一致，相关指标可能相同。</p>
   {% if not has_data %}
     <p>暂无流水线箱清单数据，请先导入订单并生成流水线拆分后再查看方案对比结果。</p>
   {% else %}
@@ -51,6 +52,8 @@
           <th>各工位作业时长(秒)</th>
           <th>各工位等待时长(秒)</th>
           <th>工位跨度(秒)</th>
+          <th>工位分配捆数</th>
+          <th>排序预览</th>
         </tr>
       </thead>
       <tbody>
@@ -75,6 +78,12 @@
                 <div>{{ k }}: {{ v }}</div>
               {% endfor %}
             </td>
+            <td>
+              {% for k, v in row.metrics.station_allocated_qty.items %}
+                <div>{{ k }}: {{ v }}</div>
+              {% endfor %}
+            </td>
+            <td>{{ row.metrics.sequence_preview|join:" → " }}</td>
           </tr>
         {% endfor %}
       </tbody>

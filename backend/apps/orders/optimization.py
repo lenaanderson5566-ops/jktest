@@ -6,6 +6,7 @@ from itertools import groupby
 from typing import Callable
 
 from apps.masterdata.models import (
+    GlobalConfig,
     PackingStation,
     StationDenominationEfficiency,
     StationDenominationSupport,
@@ -55,11 +56,14 @@ def build_strategy_comparison() -> dict:
     for row in StationDenominationEfficiency.objects.filter(enabled=True):
         eff_map[(row.station_id, str(row.denomination))] = float(row.unit_boxing_seconds)
 
+    station_order_map = {s.id: idx for idx, s in enumerate(stations, start=1)}
+    entry_interval = _float_config('BOX_ENTRY_INTERVAL_SECONDS', 5.0)
+
     strategies: list[tuple[str, str, Callable[[list[BoxItem]], list[BoxItem]], str]] = [
-        ('joint_opt', '联合优化方案', _sequence_joint_opt, 'balanced'),
+        ('joint_opt', '联合优化方案', lambda rows: _sequence_joint_opt(rows, support_map, station_order_map), 'balanced'),
         ('work_desc', '总工作量降序', _sequence_work_desc, 'balanced'),
-        ('station1_focus', '1号位集中导向', _sequence_work_desc, 'station_1'),
-        ('station3_focus', '3号位集中导向', _sequence_work_desc, 'station_3'),
+        ('station1_focus', '1号位集中导向', lambda rows: _sequence_station_focus(rows, support_map, station_order_map, 1), 'station_1'),
+        ('station3_focus', '3号位集中导向', lambda rows: _sequence_station_focus(rows, support_map, station_order_map, 3), 'station_3'),
         ('line_cluster', '线路聚集导向', _sequence_line_cluster, 'balanced'),
         ('short_box_first', '短箱优先', _sequence_short_first, 'balanced'),
         ('long_box_first', '长箱优先', _sequence_long_first, 'balanced'),
@@ -69,7 +73,8 @@ def build_strategy_comparison() -> dict:
     results: list[StrategyResult] = []
     for key, name, seq_fn, alloc_mode in strategies:
         sequenced = seq_fn(boxes)
-        metrics = _simulate(sequenced, stations, transfer_map, support_map, eff_map, alloc_mode)
+        metrics = _simulate(sequenced, stations, transfer_map, support_map, eff_map, alloc_mode, station_order_map, entry_interval)
+        metrics['sequence_preview'] = [f"{b.organization_name}-{b.seq_no}" for b in sequenced[:8]]
         results.append(StrategyResult(key=key, name=name, metrics=metrics))
 
     return {
@@ -107,7 +112,7 @@ def _load_boxes() -> list[BoxItem]:
         row['denoms'][denom] += int(task.bundle_count)
         row['total_bundles'] += int(task.bundle_count)
 
-    boxes = [
+    return [
         BoxItem(
             box_key=key,
             order_no=value['order_no'],
@@ -121,7 +126,6 @@ def _load_boxes() -> list[BoxItem]:
         )
         for key, value in grouped.items()
     ]
-    return boxes
 
 
 def _split_org_blocks(boxes: list[BoxItem]) -> list[list[BoxItem]]:
@@ -159,29 +163,63 @@ def _sequence_long_first(boxes: list[BoxItem]) -> list[BoxItem]:
     return merged
 
 
-def _sequence_joint_opt(boxes: list[BoxItem]) -> list[BoxItem]:
+def _sequence_station_focus(
+    boxes: list[BoxItem],
+    support_map: dict[str, list[int]],
+    station_order_map: dict[int, int],
+    target_order: int,
+) -> list[BoxItem]:
+    blocks = _split_org_blocks(boxes)
+
+    def score(block: list[BoxItem]) -> tuple[int, int]:
+        focus_qty = 0
+        total_qty = 0
+        for box in block:
+            for denom, qty in box.denoms.items():
+                total_qty += qty
+                for sid in support_map.get(denom, []):
+                    if station_order_map.get(sid) == target_order:
+                        focus_qty += qty
+                        break
+        return -focus_qty, -total_qty
+
+    blocks.sort(key=score)
+    return [x for block in blocks for x in block]
+
+
+def _sequence_joint_opt(
+    boxes: list[BoxItem],
+    support_map: dict[str, list[int]],
+    station_order_map: dict[int, int],
+) -> list[BoxItem]:
     blocks = _split_org_blocks(boxes)
     if len(blocks) <= 2:
         return [x for block in blocks for x in block]
 
-    used = [False] * len(blocks)
+    remaining = blocks[:]
     sequence: list[list[BoxItem]] = []
     last_route = None
-    for _ in range(len(blocks)):
-        best_idx = None
+
+    while remaining:
+        best_idx = 0
         best_score = None
-        for i, block in enumerate(blocks):
-            if used[i]:
-                continue
-            block_work = sum(x.total_bundles for x in block)
-            route_penalty = 0 if last_route in (None, block[0].route_no) else 8
-            score = block_work + route_penalty
+        for i, block in enumerate(remaining):
+            total_qty = sum(x.total_bundles for x in block)
+            route_penalty = 0 if (last_route is None or block[0].route_no == last_route) else 30
+            # 对前段工位友好（降低前段拥堵）
+            front_station_fit = 0
+            for box in block:
+                for denom, qty in box.denoms.items():
+                    if any(station_order_map.get(sid, 999) <= 2 for sid in support_map.get(denom, [])):
+                        front_station_fit += qty
+            score = route_penalty + total_qty - (0.2 * front_station_fit)
             if best_score is None or score < best_score:
-                best_score = score
                 best_idx = i
-        used[best_idx] = True
-        sequence.append(blocks[best_idx])
-        last_route = blocks[best_idx][0].route_no
+                best_score = score
+
+        selected = remaining.pop(best_idx)
+        sequence.append(selected)
+        last_route = selected[0].route_no
 
     return [x for block in sequence for x in block]
 
@@ -193,6 +231,8 @@ def _simulate(
     support_map: dict[str, list[int]],
     eff_map: dict[tuple[int, str], float],
     alloc_mode: str,
+    station_order_map: dict[int, int],
+    box_entry_interval: float,
 ) -> dict:
     if not boxes:
         return {}
@@ -203,11 +243,10 @@ def _simulate(
     station_first_start = {s.id: None for s in stations}
     station_last_end = {s.id: 0.0 for s in stations}
     station_load_counter = {s.id: 0.0 for s in stations}
+    station_alloc_qty = {s.id: 0 for s in stations}
 
-    box_entry_interval = 5.0
     route_switches = 0
     prev_route = None
-    station_order_map = {s.id: idx for idx, s in enumerate(stations, start=1)}
 
     last_box_finish = 0.0
     for box_idx, box in enumerate(boxes):
@@ -219,7 +258,15 @@ def _simulate(
         prev_finish = release_time
         prev_station_id = None
 
-        allocation = _allocate_for_box(box, stations, support_map, station_load_counter, alloc_mode, station_order_map)
+        allocation = _allocate_for_box(
+            box,
+            stations,
+            support_map,
+            station_load_counter,
+            alloc_mode,
+            station_order_map,
+            eff_map,
+        )
 
         for station in stations:
             station_id = station.id
@@ -233,6 +280,7 @@ def _simulate(
             for denom, qty in quantities.items():
                 unit_time = eff_map.get((station_id, denom), float(station.unit_boxing_seconds))
                 proc_time += unit_time * qty
+                station_alloc_qty[station_id] += qty
             end_time = start_time + proc_time
 
             if station_first_start[station_id] is None:
@@ -262,6 +310,7 @@ def _simulate(
         'station_busy_seconds': {s.station_name: round(station_busy[s.id], 2) for s in stations},
         'station_wait_seconds': {s.station_name: round(station_wait[s.id], 2) for s in stations},
         'station_span_seconds': spans,
+        'station_allocated_qty': {s.station_name: int(station_alloc_qty[s.id]) for s in stations},
         'line_continuity': continuity,
         'route_switches': route_switches,
     }
@@ -274,6 +323,7 @@ def _allocate_for_box(
     station_load_counter: dict[int, float],
     alloc_mode: str,
     station_order_map: dict[int, int],
+    eff_map: dict[tuple[int, str], float],
 ) -> dict[int, dict[str, int]]:
     allocation: dict[int, dict[str, int]] = defaultdict(dict)
 
@@ -283,22 +333,69 @@ def _allocate_for_box(
     elif alloc_mode == 'station_3':
         preferred_station_no = 3
 
+    station_default_unit = {s.id: float(s.unit_boxing_seconds) for s in stations}
+
     for denom, qty in box.denoms.items():
         compatible = support_map.get(denom, [])
         if not compatible:
             continue
 
-        if alloc_mode in ('station_1', 'station_3'):
-            selected = min(
-                compatible,
-                key=lambda sid: (0 if station_order_map.get(sid) == preferred_station_no else 1, station_order_map.get(sid, 999)),
-            )
-        elif alloc_mode == 'complement':
-            selected = min(compatible, key=lambda sid: station_load_counter[sid])
-        else:
-            selected = min(compatible, key=lambda sid: station_order_map.get(sid, 999))
+        # 仅一个兼容工位时，任何策略都会给出相同分配，这是业务数据天然结果
+        if len(compatible) == 1:
+            selected = compatible[0]
+            allocation[selected][denom] = allocation[selected].get(denom, 0) + qty
+            station_load_counter[selected] += qty
+            continue
 
-        allocation[selected][denom] = allocation[selected].get(denom, 0) + qty
-        station_load_counter[selected] += qty
+        ranked = sorted(
+            compatible,
+            key=lambda sid: (eff_map.get((sid, denom), station_default_unit.get(sid, 1.0)), station_load_counter[sid]),
+        )
+
+        if alloc_mode in ('station_1', 'station_3'):
+            preferred = [sid for sid in compatible if station_order_map.get(sid) == preferred_station_no]
+            lead = preferred[0] if preferred else ranked[0]
+            lead_qty = int(round(qty * 0.8))
+            lead_qty = min(max(1, lead_qty), qty)
+            remain = qty - lead_qty
+
+            allocation[lead][denom] = allocation[lead].get(denom, 0) + lead_qty
+            station_load_counter[lead] += lead_qty
+
+            if remain > 0:
+                follower = ranked[0] if ranked[0] != lead else ranked[1]
+                allocation[follower][denom] = allocation[follower].get(denom, 0) + remain
+                station_load_counter[follower] += remain
+            continue
+
+        if alloc_mode == 'complement':
+            # 轮询分配到当前累计负载最小工位
+            for _ in range(qty):
+                sid = min(compatible, key=lambda c: station_load_counter[c])
+                allocation[sid][denom] = allocation[sid].get(denom, 0) + 1
+                station_load_counter[sid] += 1
+            continue
+
+        # balanced：优先快工位，但按负载做比例回退
+        lead = ranked[0]
+        second = ranked[1]
+        split = int(round(qty * 0.65))
+        split = min(max(1, split), qty)
+        allocation[lead][denom] = allocation[lead].get(denom, 0) + split
+        station_load_counter[lead] += split
+        if qty - split > 0:
+            allocation[second][denom] = allocation[second].get(denom, 0) + (qty - split)
+            station_load_counter[second] += (qty - split)
 
     return allocation
+
+
+def _float_config(key: str, default: float) -> float:
+    row = GlobalConfig.objects.filter(config_key=key, enabled=True).first()
+    if not row:
+        return default
+    try:
+        value = float(str(row.config_value).strip())
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
