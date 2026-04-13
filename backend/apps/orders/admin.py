@@ -70,12 +70,17 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         if not required.issubset(set(headers)):
             raise ValueError('请使用系统提供的长表模板导入')
 
+        batch_order_date = None
         for row_no, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             try:
                 if not row:
                     continue
 
                 order_date = _to_date(row[idx['订单日期']])
+                if batch_order_date is None:
+                    batch_order_date = order_date
+                elif order_date != batch_order_date:
+                    raise ValueError('同一份Excel仅支持一个订单日期，请按日期拆分导入')
                 org_no = str(row[idx['机构号']] or '').strip()
                 route_no = str(row[idx['线路号']] or '').strip()
                 if not org_no or not route_no:
@@ -87,7 +92,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
                 if not route:
                     raise ValueError(f'找不到线路号: {route_no}')
 
-                order_no = _system_order_no(order_date, org_no, route_no)
+                order_no = _system_order_no(order_date)
 
                 denom = Decimal(_normalize_denomination(row[idx['面额']]))
                 currency_type = CurrencyType.COIN if denom < Decimal('5') else CurrencyType.BANKNOTE
@@ -207,5 +212,5 @@ def _to_decimal(value) -> Decimal:
     return Decimal(normalized)
 
 
-def _system_order_no(order_date: date, org_no: str, route_no: str) -> str:
-    return f'ORD{order_date.strftime("%Y%m%d")}-{org_no}-{route_no}'
+def _system_order_no(order_date: date) -> str:
+    return f'ORD{order_date.strftime("%Y%m%d")}'
