@@ -13,7 +13,7 @@ from django.shortcuts import redirect
 from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
-from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, Organization, TransportRoute
+from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, GlobalConfig, Organization, TransportRoute
 from .models import (
     ManualPackTask,
     OrderImportBatch,
@@ -426,8 +426,8 @@ def _next_order_no(order_date: date) -> str:
 
 
 def _rebuild_batch_splits(orders: list[OrganizationOrder]) -> None:
-    manual_threshold = 20
-    box_capacity = 16
+    manual_threshold = _int_config('MANUAL_PACK_THRESHOLD', 20)
+    box_capacity = _int_config('PIPELINE_BOX_CAPACITY', 16)
 
     grouped: dict[tuple[str, object, int, int], list[OrganizationOrder]] = {}
     for order in orders:
@@ -470,3 +470,14 @@ def _rebuild_batch_splits(orders: list[OrganizationOrder]) -> None:
                 )
                 remain -= bundles
                 capacity_left -= bundles
+
+
+def _int_config(key: str, default: int) -> int:
+    row = GlobalConfig.objects.filter(config_key=key, enabled=True).first()
+    if not row:
+        return default
+    try:
+        value = int(str(row.config_value).strip())
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
