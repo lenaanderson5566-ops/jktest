@@ -16,9 +16,6 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'apps.masterdata',
     'apps.orders',
-    'apps.optimizer',
-    'apps.jobcenter',
-    'apps.runs',
 ]
 
 MIDDLEWARE = [

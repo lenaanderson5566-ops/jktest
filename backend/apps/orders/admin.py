@@ -13,8 +13,7 @@ from django.shortcuts import redirect
 from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
-from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, Organization, TransportRoute
-from apps.optimizer.models import GlobalConfig
+from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, GlobalConfig, Organization, TransportRoute
 from .models import (
     ManualPackTask,
     OrderImportBatch,
