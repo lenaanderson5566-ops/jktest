@@ -11,7 +11,7 @@ from uuid import uuid4
 from django.db import transaction
 from django.utils import timezone
 
-from apps.masterdata.models import PackingStation, StationDenominationEfficiency, TransferSegment
+from apps.masterdata.models import PackingStation, StationDenominationEfficiency, StationDenominationSupport, TransferSegment
 from apps.optimizer.models import (
     GlobalConfig,
     OptimizeMode,
@@ -55,6 +55,7 @@ class PipelineBoxAggregate:
     source_seq_no: int = 0
     source_box_seq_no: int = 0
     denomination_bundles: Dict[Decimal, int] = field(default_factory=dict)
+    denomination_items: Dict[tuple[str, Decimal], int] = field(default_factory=dict)
 
     @property
     def source_order(self) -> OrganizationOrder:
@@ -62,11 +63,11 @@ class PipelineBoxAggregate:
 
     @property
     def bundle_count(self) -> int:
-        return int(sum(self.denomination_bundles.values()))
+        return int(sum(self.denomination_items.values()))
 
     @property
     def denominations(self) -> List[Decimal]:
-        return sorted(self.denomination_bundles.keys(), reverse=True)
+        return sorted({denom for _, denom in self.denomination_items.keys()}, reverse=True)
 
 
 class SortingEngine:
@@ -87,6 +88,7 @@ class SortingEngine:
         self.stations = list(PackingStation.objects.filter(enabled=True).order_by('station_order'))
         self.transfer_map = self._build_transfer_map()
         self.efficiency_map = self._build_efficiency_map()
+        self.support_map = self._build_support_map()
         self.weights = self._load_weights()
         self.box_interval = self._load_float_config(self.CONFIG_KEYS['BOX_INTERVAL'], default=2.0)
         self.max_iterations = max(2, int(self._load_float_config(self.CONFIG_KEYS['MAX_ITERATIONS'], default=100)))
@@ -119,14 +121,21 @@ class SortingEngine:
             mapping[(item.from_station_id, item.to_station_id)] = float(item.fixed_transfer_seconds)
         return mapping
 
-    def _build_efficiency_map(self) -> Dict[int, Dict[Decimal, tuple[int, float]]]:
-        result: Dict[int, Dict[Decimal, tuple[int, float]]] = {}
+    def _build_efficiency_map(self) -> Dict[int, Dict[tuple[str, Decimal], tuple[int, float]]]:
+        result: Dict[int, Dict[tuple[str, Decimal], tuple[int, float]]] = {}
         rows = StationDenominationEfficiency.objects.filter(enabled=True)
         for row in rows:
-            result.setdefault(row.station_id, {})[Decimal(row.denomination)] = (
+            result.setdefault(row.station_id, {})[(row.currency_type, Decimal(row.denomination))] = (
                 int(row.max_units_per_action),
                 float(row.unit_boxing_seconds),
             )
+        return result
+
+    def _build_support_map(self) -> Dict[int, set[tuple[str, Decimal]]]:
+        result: Dict[int, set[tuple[str, Decimal]]] = {}
+        rows = StationDenominationSupport.objects.filter(enabled=True)
+        for row in rows:
+            result.setdefault(row.station_id, set()).add((row.currency_type, Decimal(row.denomination)))
         return result
 
     def _load_weights(self) -> Dict[str, float]:
@@ -172,17 +181,30 @@ class SortingEngine:
 
     def _box_station_process_seconds(self, box: PipelineBoxAggregate, station: PackingStation) -> float:
         eff_map = self.efficiency_map.get(station.id, {})
-        denom_items = [
-            (denom, max(0, int(qty)))
-            for denom, qty in box.denomination_bundles.items()
-            if max(0, int(qty)) > 0 and denom in eff_map
-        ]
-        if not denom_items:
+        support_set = self.support_map.get(station.id, set())
+
+        matched_items: list[tuple[str, Decimal, int]] = []
+        for (currency_type, denom), qty in box.denomination_items.items():
+            bundles = max(0, int(qty))
+            if bundles <= 0:
+                continue
+            # 只对该工位真正支持的面额计时；若未维护支持表，则回退为按效率表或工位默认能力处理
+            if support_set:
+                if (currency_type, denom) not in support_set:
+                    continue
+            elif eff_map and (currency_type, denom) not in eff_map:
+                continue
+            matched_items.append((currency_type, denom, bundles))
+
+        if not matched_items:
             return 0.0
 
         duration = float(station.fixed_boxing_seconds)
-        for denom, bundles in denom_items:
-            max_units, unit_seconds = eff_map[denom]
+        for currency_type, denom, bundles in matched_items:
+            max_units, unit_seconds = eff_map.get(
+                (currency_type, denom),
+                (int(station.max_units_per_action), float(station.unit_boxing_seconds)),
+            )
             batches = (bundles + max_units - 1) // max_units if max_units > 0 else bundles
             duration += float(batches) * unit_seconds
         return duration
@@ -367,7 +389,10 @@ class SortingEngine:
         for index, (order, start_seconds, finish_seconds) in enumerate(evaluation['timings'], start=1):
             start_seconds = round(start_seconds, 2)
             finish_seconds = round(finish_seconds, 2)
-            denom_desc = ', '.join(f'{format(denom, "f")}x{qty}' for denom, qty in sorted(order.denomination_bundles.items(), reverse=True))
+            denom_desc = ', '.join(
+                f'{currency_type}:{format(denom, "f")}x{qty}'
+                for (currency_type, denom), qty in sorted(order.denomination_items.items(), key=lambda item: (item[0][0], item[0][1]), reverse=True)
+            )
             SortedOrderResult.objects.create(
                 batch=summary,
                 seq_no=index,
@@ -444,11 +469,14 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
                     source_seq_no=len(aggregated_boxes) + 1,
                     source_box_seq_no=int(box.seq_no),
                     denomination_bundles={},
+                    denomination_items={},
                 )
                 aggregated_boxes[box_key] = aggregate
             aggregate.source_orders.append(row)
             denom = Decimal(str(row.denomination))
             aggregate.denomination_bundles[denom] = aggregate.denomination_bundles.get(denom, 0) + int(box.bundle_count)
+            item_key = (row.currency_type, denom)
+            aggregate.denomination_items[item_key] = aggregate.denomination_items.get(item_key, 0) + int(box.bundle_count)
 
     boxes = sorted(
         aggregated_boxes.values(),
