@@ -86,8 +86,6 @@ class SortingEngine:
     def _load_weights(self) -> Dict[str, float]:
         weights = {
             ParameterCategory.TOTAL_TIME_WEIGHT: 1.0,
-            ParameterCategory.STATION_SPAN_WEIGHT: 0.1,
-            ParameterCategory.MANUAL_STATION_DURATION_WEIGHT: 0.2,
             ParameterCategory.STATION_CONCENTRATION_WEIGHT: 0.2,
             ParameterCategory.ROUTE_CONTINUITY_WEIGHT: 0.2,
         }
@@ -167,19 +165,11 @@ class SortingEngine:
             order_timings.append((order, order_start or 0.0, order_finish))
 
         total_seconds = max(station_available.values(), default=0.0)
-        station_spans = sum(m.span_seconds for m in station_metrics.values())
-        manual_busy = sum(
-            station_metrics[s.id].busy_seconds
-            for s in self.stations
-            if s.station_type == 'MANUAL'
-        )
         concentration = max((m.busy_seconds for m in station_metrics.values()), default=0.0)
         route_switch = self._route_switch_count(sequence)
 
         score = (
             self.weights[ParameterCategory.TOTAL_TIME_WEIGHT] * total_seconds
-            + self.weights[ParameterCategory.STATION_SPAN_WEIGHT] * station_spans
-            + self.weights[ParameterCategory.MANUAL_STATION_DURATION_WEIGHT] * manual_busy
             + self.weights[ParameterCategory.STATION_CONCENTRATION_WEIGHT] * concentration
             + self.weights[ParameterCategory.ROUTE_CONTINUITY_WEIGHT] * route_switch
         )
