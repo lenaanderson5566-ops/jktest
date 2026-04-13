@@ -36,4 +36,48 @@
       {% endfor %}
     </tbody>
   </table>
+
+  <h3 style="margin-top:20px;">装箱排序与分配方案对比（仿真）</h3>
+  {% if not has_data %}
+    <p>暂无流水线箱清单数据，请先导入订单并生成流水线拆分后再查看方案对比结果。</p>
+  {% else %}
+    <table class="adminlist">
+      <thead>
+        <tr>
+          <th>方案</th>
+          <th>总完工时长(秒)</th>
+          <th>线路连续性</th>
+          <th>线路切换次数</th>
+          <th>各工位作业时长(秒)</th>
+          <th>各工位等待时长(秒)</th>
+          <th>工位跨度(秒)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in results %}
+          <tr>
+            <td>{{ row.name }}</td>
+            <td>{{ row.metrics.total_finish_seconds }}</td>
+            <td>{{ row.metrics.line_continuity }}</td>
+            <td>{{ row.metrics.route_switches }}</td>
+            <td>
+              {% for k, v in row.metrics.station_busy_seconds.items %}
+                <div>{{ k }}: {{ v }}</div>
+              {% endfor %}
+            </td>
+            <td>
+              {% for k, v in row.metrics.station_wait_seconds.items %}
+                <div>{{ k }}: {{ v }}</div>
+              {% endfor %}
+            </td>
+            <td>
+              {% for k, v in row.metrics.station_span_seconds.items %}
+                <div>{{ k }}: {{ v }}</div>
+              {% endfor %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
 {% endblock %}

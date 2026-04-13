@@ -231,10 +231,14 @@ def build_pipeline_context():
 
 
 def pipeline_overview_page(request, admin_site):
+    from apps.orders.optimization import build_strategy_comparison
+
+    strategy_context = build_strategy_comparison()
     return render(request, 'admin/pipeline_overview.html', {
         **admin_site.each_context(request),
         'title': '流水线概览示意图',
         **build_pipeline_context(),
+        **strategy_context,
     })
 
 
