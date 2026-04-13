@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+import random
 from typing import Dict, List, Sequence
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from apps.masterdata.models import PackingStation, StationDenominationEfficiency
 from apps.optimizer.models import (
     GlobalConfig,
     OptimizeMode,
+    OptimizeModeType,
     OptimizeModeParameter,
     ParameterCategory,
 )
@@ -57,13 +59,23 @@ class SortingEngine:
         self.stations = list(PackingStation.objects.filter(enabled=True).order_by('station_order'))
         self.transfer_map = self._build_transfer_map()
         self.efficiency_map = self._build_efficiency_map()
-        self.weights = self._load_weights()
+        self.weights, self.station_concentration_weights = self._load_weights()
         self.box_interval = self._load_float_config('固定上箱间隔', 2.0)
+        self.route_switch_penalty = self._load_float_config('线路切换惩罚系数', 1.0)
         self.max_iterations = int(self._load_float_config('最大迭代次数', 100))
+        self.max_restarts = int(self._load_float_config('最大重启次数', 5))
+        self._normalize_factors = {
+            'total_seconds': 1.0,
+            'station_concentration': 1.0,
+            'route_continuity_cost': 1.0,
+        }
 
     def run(self, orders: Sequence[OrderAggregate]) -> RunResultSummary:
-        base_sequence = sorted(orders, key=self._order_workload_seconds, reverse=True)
-        best_sequence, best_eval = self._local_search(base_sequence)
+        if self.mode.mode_type == OptimizeModeType.BY_ROUTE:
+            best_sequence, best_eval = self._optimize_by_route(orders)
+        else:
+            base_sequence = sorted(orders, key=self._order_workload_seconds, reverse=True)
+            best_sequence, best_eval = self._local_search(base_sequence)
         return self._persist(best_sequence, best_eval)
 
     def _build_transfer_map(self) -> Dict[tuple[int, int], float]:
@@ -83,16 +95,20 @@ class SortingEngine:
             )
         return result
 
-    def _load_weights(self) -> Dict[str, float]:
+    def _load_weights(self) -> tuple[Dict[str, float], Dict[int, float]]:
         weights = {
             ParameterCategory.TOTAL_TIME_WEIGHT: 1.0,
             ParameterCategory.STATION_CONCENTRATION_WEIGHT: 0.2,
             ParameterCategory.ROUTE_CONTINUITY_WEIGHT: 0.2,
         }
+        station_weights: Dict[int, float] = {}
         rows = OptimizeModeParameter.objects.filter(mode=self.mode, enabled=True)
         for row in rows:
+            if row.category == ParameterCategory.STATION_CONCENTRATION_WEIGHT and row.station_id:
+                station_weights[row.station_id] = float(row.value)
+                continue
             weights[row.category] = float(row.value)
-        return weights
+        return weights, station_weights
 
     @staticmethod
     def _load_float_config(key: str, default: float) -> float:
@@ -165,49 +181,151 @@ class SortingEngine:
             order_timings.append((order, order_start or 0.0, order_finish))
 
         total_seconds = max(station_available.values(), default=0.0)
-        concentration = max((m.span_seconds for m in station_metrics.values()), default=0.0)
-        route_switch = self._route_switch_count(sequence)
+        concentration = self._station_concentration(station_metrics)
+        route_switch_cost = self._route_switch_cost(sequence)
+
+        normalized_total = total_seconds / max(self._normalize_factors['total_seconds'], 1e-6)
+        normalized_concentration = concentration / max(self._normalize_factors['station_concentration'], 1e-6)
+        normalized_route_cost = route_switch_cost / max(self._normalize_factors['route_continuity_cost'], 1e-6)
 
         score = (
-            self.weights[ParameterCategory.TOTAL_TIME_WEIGHT] * total_seconds
-            + self.weights[ParameterCategory.STATION_CONCENTRATION_WEIGHT] * concentration
-            + self.weights[ParameterCategory.ROUTE_CONTINUITY_WEIGHT] * route_switch
+            self.weights[ParameterCategory.TOTAL_TIME_WEIGHT] * normalized_total
+            + self.weights[ParameterCategory.STATION_CONCENTRATION_WEIGHT] * normalized_concentration
+            + self.weights[ParameterCategory.ROUTE_CONTINUITY_WEIGHT] * normalized_route_cost
         )
 
         return {
             'score': score,
             'total_seconds': total_seconds,
+            'station_concentration': concentration,
+            'route_continuity_cost': route_switch_cost,
             'station_metrics': station_metrics,
             'timings': order_timings,
         }
 
-    @staticmethod
-    def _route_switch_count(sequence: Sequence[OrderAggregate]) -> int:
-        switches = 0
-        prev = None
+    def _station_concentration(self, station_metrics: Dict[int, StationMetrics]) -> float:
+        if self.station_concentration_weights:
+            score = 0.0
+            for station in self.stations:
+                weight = self.station_concentration_weights.get(station.id, 0.0)
+                if weight <= 0:
+                    continue
+                span_seconds = station_metrics[station.id].span_seconds
+                score += weight * span_seconds
+            if score > 0:
+                return score
+        return max((m.span_seconds for m in station_metrics.values()), default=0.0)
+
+    def _route_switch_cost(self, sequence: Sequence[OrderAggregate]) -> float:
+        switches = 0.0
+        prev_route_id = None
         for order in sequence:
-            if prev is not None and prev != order.route_id:
-                switches += 1
-            prev = order.route_id
+            if prev_route_id is not None and prev_route_id != order.route_id:
+                switches += self.route_switch_penalty
+            prev_route_id = order.route_id
         return switches
 
+    def _set_normalization_factors(self, reference_eval: dict) -> None:
+        self._normalize_factors = {
+            'total_seconds': max(reference_eval['total_seconds'], 1.0),
+            'station_concentration': max(reference_eval['station_concentration'], 1.0),
+            'route_continuity_cost': max(reference_eval['route_continuity_cost'], 1.0),
+        }
+
+    def _optimize_by_route(self, orders: Sequence[OrderAggregate]) -> tuple[List[OrderAggregate], dict]:
+        route_groups: Dict[int, List[OrderAggregate]] = {}
+        for order in orders:
+            route_groups.setdefault(order.route_id, []).append(order)
+
+        route_sequences: Dict[int, List[OrderAggregate]] = {}
+        for route_id, group_orders in route_groups.items():
+            base_sequence = sorted(group_orders, key=self._order_workload_seconds, reverse=True)
+            seq, _ = self._local_search(base_sequence)
+            route_sequences[route_id] = seq
+
+        route_order = sorted(
+            route_sequences.keys(),
+            key=lambda rid: sum(self._order_workload_seconds(order) for order in route_sequences[rid]),
+            reverse=True,
+        )
+        sequence = [order for route_id in route_order for order in route_sequences[route_id]]
+        reference_eval = self._evaluate(sequence)
+        self._set_normalization_factors(reference_eval)
+        eval_result = self._evaluate(sequence)
+        return sequence, eval_result
+
+    @staticmethod
+    def _build_initial_sequences(base_sequence: List[OrderAggregate], max_restarts: int) -> List[List[OrderAggregate]]:
+        sequences: List[List[OrderAggregate]] = [list(base_sequence)]
+
+        by_route = sorted(base_sequence, key=lambda o: (o.route_id, -len(o.quantities), o.order_no))
+        sequences.append(by_route)
+
+        rng = random.Random(20260413)
+        while len(sequences) < max_restarts:
+            trial = list(base_sequence)
+            rng.shuffle(trial)
+            sequences.append(trial)
+        return sequences
+
+    def _iter_neighbors(self, sequence: List[OrderAggregate]) -> List[List[OrderAggregate]]:
+        n = len(sequence)
+        if n <= 1:
+            return []
+
+        neighbors: List[List[OrderAggregate]] = []
+
+        for i in range(n - 1):
+            trial = list(sequence)
+            trial[i], trial[i + 1] = trial[i + 1], trial[i]
+            neighbors.append(trial)
+
+        stride = max(1, n // 8)
+        for i in range(0, n - 1, stride):
+            j = min(n - 1, i + stride)
+            if i == j:
+                continue
+            trial = list(sequence)
+            trial[i], trial[j] = trial[j], trial[i]
+            neighbors.append(trial)
+
+        for i in range(0, n - 1, stride):
+            j = min(n - 1, i + stride)
+            if i == j:
+                continue
+            trial = list(sequence)
+            moved = trial.pop(j)
+            trial.insert(i, moved)
+            neighbors.append(trial)
+
+        return neighbors
+
     def _local_search(self, base_sequence: List[OrderAggregate]) -> tuple[List[OrderAggregate], dict]:
-        best = list(base_sequence)
-        best_eval = self._evaluate(best)
+        reference_eval = self._evaluate(base_sequence)
+        self._set_normalization_factors(reference_eval)
 
-        for _ in range(self.max_iterations):
-            improved = False
-            for i in range(len(best) - 1):
-                trial = list(best)
-                trial[i], trial[i + 1] = trial[i + 1], trial[i]
-                trial_eval = self._evaluate(trial)
-                if trial_eval['score'] < best_eval['score']:
-                    best, best_eval = trial, trial_eval
-                    improved = True
-            if not improved:
-                break
+        global_best = list(base_sequence)
+        global_best_eval = self._evaluate(global_best)
 
-        return best, best_eval
+        restart_count = max(2, self.max_restarts)
+        for start_sequence in self._build_initial_sequences(base_sequence, restart_count):
+            current = list(start_sequence)
+            current_eval = self._evaluate(current)
+
+            for _ in range(self.max_iterations):
+                improved = False
+                for trial in self._iter_neighbors(current):
+                    trial_eval = self._evaluate(trial)
+                    if trial_eval['score'] < current_eval['score']:
+                        current, current_eval = trial, trial_eval
+                        improved = True
+                if not improved:
+                    break
+
+            if current_eval['score'] < global_best_eval['score']:
+                global_best, global_best_eval = current, current_eval
+
+        return global_best, global_best_eval
 
     @transaction.atomic
     def _persist(self, sequence: Sequence[OrderAggregate], evaluation: dict) -> RunResultSummary:
