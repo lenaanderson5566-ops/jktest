@@ -18,7 +18,7 @@ from apps.optimizer.models import (
     ParameterCategory,
 )
 from apps.orders.models import OrganizationOrder, SplitType
-from apps.runs.models import RunResultStationDetail, RunResultSummary, SortedOrderResult
+from apps.runs.models import RunResultSummary, SortedOrderResult
 
 
 @dataclass
@@ -48,6 +48,7 @@ class PipelineBoxAggregate:
     route: object
     route_id: int
     source_order: OrganizationOrder
+    source_seq_no: int
     source_box_seq_no: int
     denomination: Decimal
     bundle_count: int
@@ -63,8 +64,8 @@ class SortingEngine:
         self.efficiency_map = self._build_efficiency_map()
         self.weights = self._load_weights()
         self.box_interval = self._load_float_config('固定上箱间隔', 2.0)
-        self.max_iterations = int(self._load_float_config('最大迭代次数', 100))
-        self.max_restarts = int(self._load_float_config('最大重启次数', 5))
+        self.max_iterations = max(2, int(self._load_float_config('最大迭代次数', 100)))
+        self.max_restarts = max(1, int(self._load_float_config('最大重启次数', 5)))
 
     def run(self, boxes: Sequence[PipelineBoxAggregate]) -> RunResultSummary:
         base_sequence = sorted(boxes, key=self._box_workload_seconds, reverse=True)
@@ -249,22 +250,11 @@ class SortingEngine:
             remark='自动排序计算结果',
         )
 
-        for station in self.stations:
-            m = evaluation['station_metrics'][station.id]
-            RunResultStationDetail.objects.create(
-                batch=summary,
-                station=station,
-                station_span=Decimal(str(round(m.span_seconds, 2))),
-                busy_seconds=Decimal(str(round(m.busy_seconds, 2))),
-                idle_seconds=Decimal(str(round(m.idle_seconds, 2))),
-                wait_seconds=Decimal(str(round(m.wait_seconds, 2))),
-            )
-
         base_dt = timezone.now()
         for index, (order, start_seconds, finish_seconds) in enumerate(evaluation['timings'], start=1):
             SortedOrderResult.objects.create(
                 batch=summary,
-                seq_no=index,
+                seq_no=order.source_seq_no,
                 order=order.source_order,
                 order_date=order.order_date,
                 organization=order.organization,
@@ -322,6 +312,7 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
                     route=row.route,
                     route_id=row.route_id,
                     source_order=row,
+                    source_seq_no=len(boxes) + 1,
                     source_box_seq_no=box.seq_no,
                     denomination=Decimal(str(row.denomination)),
                     bundle_count=int(box.bundle_count),

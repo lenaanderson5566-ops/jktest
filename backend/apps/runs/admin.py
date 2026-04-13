@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.urls import reverse
 from django.utils.html import format_html
 
-from .models import RunResultStationDetail, RunResultSummary, SortedOrderResult
+from .models import RunResultSummary, SortedOrderResult
 
 
 @admin.register(RunResultSummary)
@@ -24,21 +24,6 @@ class RunResultSummaryAdmin(admin.ModelAdmin):
     @admin.display(description='排序订单数')
     def sorted_order_count(self, obj):
         return obj.sorted_orders.count()
-
-
-@admin.register(RunResultStationDetail)
-class RunResultStationDetailAdmin(admin.ModelAdmin):
-    list_display = (
-        'batch',
-        'station',
-        'station_span',
-        'busy_seconds',
-        'idle_seconds',
-        'wait_seconds',
-    )
-    list_filter = ('station', 'batch__optimize_mode', 'batch__run_at')
-    search_fields = ('batch__batch_no', 'station__station_no', 'station__station_name')
-    ordering = ('-batch__run_at', 'station_id')
 
 
 @admin.register(SortedOrderResult)
