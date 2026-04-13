@@ -75,6 +75,28 @@ def _validate_denomination_binding(denom_text: str, currency_type: str):
         )
 
 
+class SplitType(models.TextChoices):
+    PIPELINE_BOX = 'PIPELINE_BOX', '流水线箱'
+    MANUAL_PACK = 'MANUAL_PACK', '人工包'
+
+
+class OrderSplitDetail(models.Model):
+    order = models.ForeignKey(OrganizationOrder, on_delete=models.CASCADE, related_name='split_details', verbose_name='订单明细')
+    split_type = models.CharField('拆分类型', max_length=16, choices=SplitType.choices)
+    seq_no = models.PositiveIntegerField('序号', default=1)
+    bundle_count = models.PositiveIntegerField('捆数', default=0)
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+
+    class Meta:
+        db_table = 'order_split_detail'
+        verbose_name = '订单拆分明细'
+        verbose_name_plural = verbose_name
+        unique_together = ('order', 'split_type', 'seq_no')
+
+    def __str__(self):
+        return f'{self.order_id}-{self.split_type}-{self.seq_no}'
+
+
 class OrderImportBatch(models.Model):
     order_no = models.CharField('订单编号', max_length=64, unique=True)
     order_date = models.DateField('订单日期')

@@ -13,13 +13,21 @@ from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
 from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, Organization, TransportRoute
-from .models import OrderImportBatch, OrderStatus, OrganizationOrder
+from .models import OrderImportBatch, OrderSplitDetail, OrderStatus, OrganizationOrder, SplitType
 
 
 class OrganizationOrderInline(admin.TabularInline):
     model = OrganizationOrder
     extra = 0
     fields = ('line_no', 'organization', 'route', 'currency_type', 'denomination', 'quantity', 'status', 'remark')
+    readonly_fields = fields
+    can_delete = False
+
+
+class OrderSplitDetailInline(admin.TabularInline):
+    model = OrderSplitDetail
+    extra = 0
+    fields = ('split_type', 'seq_no', 'bundle_count')
     readonly_fields = fields
     can_delete = False
 
@@ -38,6 +46,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
     list_display = ('order_no', 'order_date', 'organization', 'route', 'currency_type', 'denomination', 'quantity', 'status')
     search_fields = ('order_no', 'organization__org_no', 'organization__org_name')
     list_filter = ('order_date', 'route', 'status', 'currency_type', 'denomination')
+    inlines = [OrderSplitDetailInline]
 
     def get_urls(self):
         urls = super().get_urls()
@@ -143,7 +152,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         )
         for detail in details:
             try:
-                OrganizationOrder.objects.create(
+                created_order = OrganizationOrder.objects.create(
                     import_batch=batch,
                     line_no=detail['line_no'],
                     order_no=order_no,
@@ -156,6 +165,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
                     status=OrderStatus.NEW,
                     remark=detail['remark'],
                 )
+                _rebuild_order_splits(order=created_order)
             except IntegrityError as exc:
                 if 'organization_order_order_no_currency_type' in str(exc):
                     raise ValueError(
@@ -261,3 +271,40 @@ def _next_order_no(order_date: date) -> str:
         if suffix.isdigit():
             max_no = max(max_no, int(suffix))
     return f'{prefix}{max_no + 1:03d}'
+
+
+def _rebuild_order_splits(order: OrganizationOrder | None) -> None:
+    if order is None:
+        return
+    order.split_details.all().delete()
+
+    manual_threshold = 20
+    box_capacity = 16
+    total_qty = int(order.quantity)
+
+    manual_qty = 0
+    pipeline_qty = total_qty
+    if order.currency_type == CurrencyType.BANKNOTE:
+        manual_qty = (total_qty // manual_threshold) * manual_threshold
+        pipeline_qty = total_qty - manual_qty
+
+    for i in range(manual_qty // manual_threshold):
+        OrderSplitDetail.objects.create(
+            order=order,
+            split_type=SplitType.MANUAL_PACK,
+            seq_no=i + 1,
+            bundle_count=manual_threshold,
+        )
+
+    seq = 1
+    remain = pipeline_qty
+    while remain > 0:
+        bundles = min(box_capacity, remain)
+        OrderSplitDetail.objects.create(
+            order=order,
+            split_type=SplitType.PIPELINE_BOX,
+            seq_no=seq,
+            bundle_count=bundles,
+        )
+        remain -= bundles
+        seq += 1

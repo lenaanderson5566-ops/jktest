@@ -16,7 +16,7 @@ from apps.optimizer.models import (
     OptimizeModeParameter,
     ParameterCategory,
 )
-from apps.orders.models import OrganizationOrder
+from apps.orders.models import OrganizationOrder, SplitType
 from apps.runs.models import RunResultStationDetail, RunResultSummary, SortedOrderResult
 
 
@@ -279,6 +279,7 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
     order_rows = list(
         OrganizationOrder.objects.filter(order_date=order_date)
         .select_related('organization', 'route')
+        .prefetch_related('split_details')
         .order_by('order_no', 'organization_id', 'route_id', 'denomination')
     )
     if not order_rows:
@@ -298,8 +299,17 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
                 quantities={},
             )
             grouped[group_key] = agg
-        agg.quantities[Decimal(str(row.denomination))] = agg.quantities.get(Decimal(str(row.denomination)), 0) + int(row.quantity)
-    orders = list(grouped.values())
+        pipeline_qty = sum(
+            int(item.bundle_count)
+            for item in row.split_details.all()
+            if item.split_type == SplitType.PIPELINE_BOX
+        )
+        if pipeline_qty <= 0:
+            continue
+        agg.quantities[Decimal(str(row.denomination))] = agg.quantities.get(Decimal(str(row.denomination)), 0) + pipeline_qty
+    orders = [item for item in grouped.values() if item.quantities]
+    if not orders:
+        raise ValueError(f'{order_date} 没有可进入流水线的订单明细。')
 
     engine = SortingEngine(mode)
     return engine.run(orders)
