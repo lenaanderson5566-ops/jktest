@@ -14,6 +14,7 @@ from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
 from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, Organization, TransportRoute
+from apps.optimizer.models import GlobalConfig
 from .models import (
     ManualPackTask,
     OrderImportBatch,
@@ -288,6 +289,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
             source_filename=getattr(file_obj, 'name', ''),
             total_rows=len(details),
         )
+        created_orders = []
         for detail in details:
             try:
                 created_order = OrganizationOrder.objects.create(
@@ -303,7 +305,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
                     status=OrderStatus.NEW,
                     remark=detail['remark'],
                 )
-                _rebuild_order_splits(order=created_order)
+                created_orders.append(created_order)
             except IntegrityError as exc:
                 if 'organization_order_order_no_currency_type' in str(exc):
                     raise ValueError(
@@ -311,6 +313,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
                         '请先执行数据库迁移: python manage.py migrate orders 0002'
                     ) from exc
                 raise
+        _rebuild_batch_splits(created_orders)
 
     def export_excel(self, request):
         wb = Workbook()
@@ -411,38 +414,59 @@ def _next_order_no(order_date: date) -> str:
     return f'{prefix}{max_no + 1:03d}'
 
 
-def _rebuild_order_splits(order: OrganizationOrder | None) -> None:
-    if order is None:
-        return
-    order.split_details.all().delete()
+def _rebuild_batch_splits(orders: list[OrganizationOrder]) -> None:
+    manual_threshold = _int_config('MANUAL_PACK_THRESHOLD', 20)
+    box_capacity = _int_config('PIPELINE_BOX_CAPACITY', 16)
 
-    manual_threshold = 20
-    box_capacity = 16
-    total_qty = int(order.quantity)
+    grouped: dict[tuple[str, object, int, int], list[OrganizationOrder]] = {}
+    for order in orders:
+        order.split_details.all().delete()
+        group_key = (order.order_no, order.order_date, order.organization_id, order.route_id)
+        grouped.setdefault(group_key, []).append(order)
 
-    manual_qty = 0
-    pipeline_qty = total_qty
-    if order.currency_type == CurrencyType.BANKNOTE:
-        manual_qty = (total_qty // manual_threshold) * manual_threshold
-        pipeline_qty = total_qty - manual_qty
+    for _, group_orders in grouped.items():
+        pipeline_remain: list[tuple[OrganizationOrder, int]] = []
+        for order in group_orders:
+            total_qty = int(order.quantity)
+            if order.currency_type != CurrencyType.BANKNOTE:
+                pipeline_remain.append((order, total_qty))
+                continue
 
-    for i in range(manual_qty // manual_threshold):
-        OrderSplitDetail.objects.create(
-            order=order,
-            split_type=SplitType.MANUAL_PACK,
-            seq_no=i + 1,
-            bundle_count=manual_threshold,
-        )
+            manual_qty = (total_qty // manual_threshold) * manual_threshold
+            remain_qty = total_qty - manual_qty
+            for i in range(manual_qty // manual_threshold):
+                OrderSplitDetail.objects.create(
+                    order=order,
+                    split_type=SplitType.MANUAL_PACK,
+                    seq_no=i + 1,
+                    bundle_count=manual_threshold,
+                )
+            pipeline_remain.append((order, remain_qty))
 
-    seq = 1
-    remain = pipeline_qty
-    while remain > 0:
-        bundles = min(box_capacity, remain)
-        OrderSplitDetail.objects.create(
-            order=order,
-            split_type=SplitType.PIPELINE_BOX,
-            seq_no=seq,
-            bundle_count=bundles,
-        )
-        remain -= bundles
-        seq += 1
+        box_seq = 1
+        capacity_left = box_capacity
+        for order, remain in sorted(pipeline_remain, key=lambda item: item[0].denomination, reverse=True):
+            while remain > 0:
+                if capacity_left == 0:
+                    box_seq += 1
+                    capacity_left = box_capacity
+                bundles = min(remain, capacity_left)
+                OrderSplitDetail.objects.create(
+                    order=order,
+                    split_type=SplitType.PIPELINE_BOX,
+                    seq_no=box_seq,
+                    bundle_count=bundles,
+                )
+                remain -= bundles
+                capacity_left -= bundles
+
+
+def _int_config(key: str, default: int) -> int:
+    row = GlobalConfig.objects.filter(config_key=key, enabled=True).first()
+    if not row:
+        return default
+    try:
+        value = int(str(row.config_value).strip())
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
