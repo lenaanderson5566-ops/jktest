@@ -12,7 +12,13 @@ from django.shortcuts import redirect
 from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
-from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, Organization, TransportRoute
+from apps.masterdata.models import (
+    CurrencyType,
+    DenominationPackagingSpec,
+    Organization,
+    StationDenominationSupport,
+    TransportRoute,
+)
 from .models import OrganizationOrder
 
 
@@ -26,6 +32,8 @@ DENOMINATION_TO_FIELD = {
     '0.5': 'qty_coin_05',
     '0.1': 'qty_coin_01',
 }
+
+FIELD_TO_DENOMINATION = {v: k for k, v in DENOMINATION_TO_FIELD.items()}
 
 
 @admin.register(OrganizationOrder)
@@ -107,24 +115,26 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
             if not route:
                 raise ValueError(f'找不到线路号: {route_no}')
 
-            OrganizationOrder.objects.update_or_create(
-                order_no=order_no,
-                defaults={
-                    'order_date': order_date,
-                    'organization': org,
-                    'route': route,
-                    'qty_100': int(row[idx.get('100元捆数', -1)] or 0),
-                    'qty_50': int(row[idx.get('50元捆数', -1)] or 0),
-                    'qty_20': int(row[idx.get('20元捆数', -1)] or 0),
-                    'qty_10': int(row[idx.get('10元捆数', -1)] or 0),
-                    'qty_5': int(row[idx.get('5元捆数', -1)] or 0),
-                    'qty_coin_1': int(row[idx.get('1元包数', -1)] or 0),
-                    'qty_coin_05': int(row[idx.get('0.5元包数', -1)] or 0),
-                    'qty_coin_01': int(row[idx.get('0.1元包数', -1)] or 0),
-                    'status': str(row[idx.get('订单状态', -1)] or 'NEW'),
-                    'remark': str(row[idx.get('备注', -1)] or '').strip(),
-                },
-            )
+            payload = {
+                'order_date': order_date,
+                'organization': org,
+                'route': route,
+                'qty_100': int(row[idx.get('100元捆数', -1)] or 0),
+                'qty_50': int(row[idx.get('50元捆数', -1)] or 0),
+                'qty_20': int(row[idx.get('20元捆数', -1)] or 0),
+                'qty_10': int(row[idx.get('10元捆数', -1)] or 0),
+                'qty_5': int(row[idx.get('5元捆数', -1)] or 0),
+                'qty_coin_1': int(row[idx.get('1元包数', -1)] or 0),
+                'qty_coin_05': int(row[idx.get('0.5元包数', -1)] or 0),
+                'qty_coin_01': int(row[idx.get('0.1元包数', -1)] or 0),
+                'status': str(row[idx.get('订单状态', -1)] or 'NEW'),
+                'remark': str(row[idx.get('备注', -1)] or '').strip(),
+            }
+            for field, qty in payload.items():
+                if field in FIELD_TO_DENOMINATION and qty:
+                    _validate_denomination_bound(FIELD_TO_DENOMINATION[field])
+
+            OrganizationOrder.objects.update_or_create(order_no=order_no, defaults=payload)
 
     @staticmethod
     def _import_long(ws, headers):
@@ -160,6 +170,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
             field = DENOMINATION_TO_FIELD.get(denom)
             if not field:
                 raise ValueError(f'不支持的面额: {row[idx["面额"]]}')
+            _validate_denomination_bound(denom)
             qty_col = idx.get('数量')
             amount_col = idx.get('金额')
             qty_raw = row[qty_col] if qty_col is not None else None
