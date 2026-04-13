@@ -333,8 +333,10 @@ class SortingEngine:
             )[:255],
         )
 
-        base_dt = timezone.now()
+        base_dt = summary.run_at
         for index, (order, start_seconds, finish_seconds) in enumerate(evaluation['timings'], start=1):
+            start_seconds = round(start_seconds, 2)
+            finish_seconds = round(finish_seconds, 2)
             SortedOrderResult.objects.create(
                 batch=summary,
                 seq_no=order.source_seq_no,
@@ -345,7 +347,7 @@ class SortingEngine:
                 final_position=index,
                 est_start_time=base_dt + timedelta(seconds=start_seconds),
                 est_finish_time=base_dt + timedelta(seconds=finish_seconds),
-                est_total_seconds=Decimal(str(round(finish_seconds, 2))),
+                est_total_seconds=Decimal(str(finish_seconds)),
                 remark=f'按箱排序-原箱序号:{order.source_box_seq_no}',
             )
 

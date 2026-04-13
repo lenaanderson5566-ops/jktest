@@ -30,7 +30,7 @@ class SortedOrderResult(models.Model):
     final_position = models.PositiveIntegerField('最终排序位置')
     est_start_time = models.DateTimeField('预计开始时间')
     est_finish_time = models.DateTimeField('预计完成时间')
-    est_total_seconds = models.DecimalField('预计总处理时长(秒)', max_digits=12, decimal_places=2)
+    est_total_seconds = models.DecimalField('预计累计完成时长(秒)', max_digits=12, decimal_places=2)
     remark = models.CharField('备注', max_length=255, blank=True)
 
     class Meta:
