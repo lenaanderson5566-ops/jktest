@@ -183,39 +183,30 @@ class DenominationPackagingSpecAdmin(admin.ModelAdmin):
 class PackingStationAdmin(admin.ModelAdmin):
     list_display = ('station_no', 'station_name', 'station_order', 'station_type', 'enabled')
     list_filter = ('station_type', 'enabled')
-    change_list_template = 'admin/pipeline_station_change_list.html'
 
-    def get_urls(self):
-        urls = super().get_urls()
-        custom_urls = [
-            path('pipeline-overview/', self.admin_site.admin_view(self.pipeline_overview), name='masterdata_pipeline_overview'),
-        ]
-        return custom_urls + urls
 
-    def changelist_view(self, request, extra_context=None):
-        extra_context = extra_context or {}
-        extra_context.update({'pipeline_overview_url': reverse('admin:masterdata_pipeline_overview')})
-        return super().changelist_view(request, extra_context)
+def build_pipeline_context():
+    stations = list(PackingStation.objects.filter(enabled=True).order_by('station_order'))
+    segments = list(TransferSegment.objects.filter(enabled=True).select_related('from_station', 'to_station'))
+    seg_map = {(s.from_station_id, s.to_station_id): s for s in segments}
 
-    def pipeline_overview(self, request):
-        stations = list(PackingStation.objects.filter(enabled=True).order_by('station_order'))
-        segments = list(TransferSegment.objects.filter(enabled=True).select_related('from_station', 'to_station'))
-        seg_map = {(s.from_station_id, s.to_station_id): s for s in segments}
-
-        chains = []
-        for idx, station in enumerate(stations):
-            next_station = stations[idx + 1] if idx + 1 < len(stations) else None
-            chains.append({
-                'station': station,
-                'segment': seg_map.get((station.id, next_station.id)) if next_station else None,
-            })
-
-        return render(request, 'admin/pipeline_overview.html', {
-            **self.admin_site.each_context(request),
-            'title': '流水线概览示意图',
-            'chains': chains,
-            'segments': segments,
+    chains = []
+    for idx, station in enumerate(stations):
+        next_station = stations[idx + 1] if idx + 1 < len(stations) else None
+        chains.append({
+            'station': station,
+            'segment': seg_map.get((station.id, next_station.id)) if next_station else None,
         })
+    return {'chains': chains, 'segments': segments}
+
+
+def pipeline_overview_page(request, admin_site):
+    return render(request, 'admin/pipeline_overview.html', {
+        **admin_site.each_context(request),
+        'title': '流水线概览示意图',
+        **build_pipeline_context(),
+    })
+
 
 admin.site.register(StationDenominationSupport)
 admin.site.register(StationDenominationEfficiency)

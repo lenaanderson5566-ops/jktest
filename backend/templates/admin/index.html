@@ -1,0 +1,16 @@
+{% extends "admin/index.html" %}
+
+{% block content %}
+  <div class="app-overview module" style="margin-bottom:16px;">
+    <table>
+      <caption>
+        <a href="{% url 'admin_overview' %}" class="section" title="系统概览">概览</a>
+      </caption>
+      <tr>
+        <th scope="row"><a href="{% url 'admin_overview' %}">流水线示意图</a></th>
+        <td>查看装箱工位与传输段的流程图式概览</td>
+      </tr>
+    </table>
+  </div>
+  {{ block.super }}
+{% endblock %}
