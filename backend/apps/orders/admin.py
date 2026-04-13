@@ -101,21 +101,22 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
     @staticmethod
     def _import_wide(ws, headers):
         idx = {name: i for i, name in enumerate(headers)}
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if not row or not row[idx['订单编号']]:
-                continue
-            order_no = str(row[idx['订单编号']]).strip()
-            order_date = _to_date(row[idx['订单日期']])
-            org_no = str(row[idx['机构号']] or '').strip()
-            route_no = str(row[idx['线路号']] or '').strip()
-            org = Organization.objects.filter(org_no=org_no).first()
-            route = TransportRoute.objects.filter(route_no=route_no).first()
-            if not org:
-                raise ValueError(f'找不到机构号: {org_no}')
-            if not route:
-                raise ValueError(f'找不到线路号: {route_no}')
+        for row_no, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            try:
+                if not row or not row[idx['订单编号']]:
+                    continue
+                order_no = str(row[idx['订单编号']]).strip()
+                order_date = _to_date(row[idx['订单日期']])
+                org_no = str(row[idx['机构号']] or '').strip()
+                route_no = str(row[idx['线路号']] or '').strip()
+                org = Organization.objects.filter(org_no=org_no).first()
+                route = TransportRoute.objects.filter(route_no=route_no).first()
+                if not org:
+                    raise ValueError(f'找不到机构号: {org_no}，请先在机构主数据维护')
+                if not route:
+                    raise ValueError(f'找不到线路号: {route_no}，请先在押运线路主数据维护')
 
-            payload = {
+                payload = {
                 'order_date': order_date,
                 'organization': org,
                 'route': route,
@@ -130,11 +131,13 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
                 'status': str(row[idx.get('订单状态', -1)] or 'NEW'),
                 'remark': str(row[idx.get('备注', -1)] or '').strip(),
             }
-            for field, qty in payload.items():
-                if field in FIELD_TO_DENOMINATION and qty:
-                    _validate_denomination_bound(FIELD_TO_DENOMINATION[field])
+                for field, qty in payload.items():
+                    if field in FIELD_TO_DENOMINATION and qty:
+                        _validate_denomination_bound(FIELD_TO_DENOMINATION[field])
 
-            OrganizationOrder.objects.update_or_create(order_no=order_no, defaults=payload)
+                OrganizationOrder.objects.update_or_create(order_no=order_no, defaults=payload)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f'宽表第{row_no}行导入失败：{exc}') from exc
 
     @staticmethod
     def _import_long(ws, headers):
@@ -152,46 +155,49 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
             'remark': '',
         })
 
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if not row:
-                continue
-            order_date = _to_date(row[idx['订单日期']])
-            org_no = str(row[idx['机构号']] or '').strip()
-            route_no = str(row[idx['线路号']] or '').strip()
-            if not org_no or not route_no:
-                continue
+        for row_no, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            try:
+                if not row:
+                    continue
+                order_date = _to_date(row[idx['订单日期']])
+                org_no = str(row[idx['机构号']] or '').strip()
+                route_no = str(row[idx['线路号']] or '').strip()
+                if not org_no or not route_no:
+                    continue
 
-            order_no_col = idx.get('订单编号')
-            order_no_val = str(row[order_no_col]).strip() if order_no_col is not None and row[order_no_col] else ''
-            order_no = order_no_val or f'ORD-{order_date.strftime("%Y%m%d")}-{org_no}-{route_no}'
-            key = (order_no, order_date, org_no, route_no)
+                order_no_col = idx.get('订单编号')
+                order_no_val = str(row[order_no_col]).strip() if order_no_col is not None and row[order_no_col] else ''
+                order_no = order_no_val or f'ORD-{order_date.strftime("%Y%m%d")}-{org_no}-{route_no}'
+                key = (order_no, order_date, org_no, route_no)
 
-            denom = _normalize_denomination(row[idx['面额']])
-            field = DENOMINATION_TO_FIELD.get(denom)
-            if not field:
-                raise ValueError(f'不支持的面额: {row[idx["面额"]]}')
-            _validate_denomination_bound(denom)
-            qty_col = idx.get('数量')
-            amount_col = idx.get('金额')
-            qty_raw = row[qty_col] if qty_col is not None else None
-            amount_raw = row[amount_col] if amount_col is not None else None
-            qty = _resolve_quantity_from_row(denom, qty_raw, amount_raw)
-            grouped[key][field] += qty
+                denom = _normalize_denomination(row[idx['面额']])
+                field = DENOMINATION_TO_FIELD.get(denom)
+                if not field:
+                    raise ValueError(f'不支持的面额: {row[idx["面额"]]}')
+                _validate_denomination_bound(denom)
+                qty_col = idx.get('数量')
+                amount_col = idx.get('金额')
+                qty_raw = row[qty_col] if qty_col is not None else None
+                amount_raw = row[amount_col] if amount_col is not None else None
+                qty = _resolve_quantity_from_row(denom, qty_raw, amount_raw)
+                grouped[key][field] += qty
 
-            status_col = idx.get('订单状态')
-            if status_col is not None and row[status_col]:
-                grouped[key]['status'] = str(row[status_col]).strip()
-            remark_col = idx.get('备注')
-            if remark_col is not None and row[remark_col]:
-                grouped[key]['remark'] = str(row[remark_col]).strip()
+                status_col = idx.get('订单状态')
+                if status_col is not None and row[status_col]:
+                    grouped[key]['status'] = str(row[status_col]).strip()
+                remark_col = idx.get('备注')
+                if remark_col is not None and row[remark_col]:
+                    grouped[key]['remark'] = str(row[remark_col]).strip()
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f'长表第{row_no}行导入失败：{exc}') from exc
 
         for (order_no, order_date, org_no, route_no), payload in grouped.items():
             org = Organization.objects.filter(org_no=org_no).first()
             route = TransportRoute.objects.filter(route_no=route_no).first()
             if not org:
-                raise ValueError(f'找不到机构号: {org_no}')
+                raise ValueError(f'聚合后订单 {order_no} 找不到机构号: {org_no}，请先维护机构主数据')
             if not route:
-                raise ValueError(f'找不到线路号: {route_no}')
+                raise ValueError(f'聚合后订单 {order_no} 找不到线路号: {route_no}，请先维护押运线路主数据')
             OrganizationOrder.objects.update_or_create(
                 order_no=order_no,
                 defaults={

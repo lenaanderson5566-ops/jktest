@@ -1,6 +1,16 @@
 from django.db import models
 
-from apps.masterdata.models import Organization, TransportRoute
+from decimal import Decimal
+
+from django.core.exceptions import ValidationError
+
+from apps.masterdata.models import (
+    CurrencyType,
+    DenominationPackagingSpec,
+    Organization,
+    StationDenominationSupport,
+    TransportRoute,
+)
 
 
 class OrderStatus(models.TextChoices):
@@ -40,3 +50,43 @@ class OrganizationOrder(models.Model):
 
     def __str__(self):
         return self.order_no
+
+    def clean(self):
+        super().clean()
+        checks = {
+            '100': self.qty_100,
+            '50': self.qty_50,
+            '20': self.qty_20,
+            '10': self.qty_10,
+            '5': self.qty_5,
+            '1': self.qty_coin_1,
+            '0.5': self.qty_coin_05,
+            '0.1': self.qty_coin_01,
+        }
+        for denom_text, qty in checks.items():
+            if qty and qty > 0:
+                _validate_denomination_binding(denom_text)
+
+
+def _validate_denomination_binding(denom_text: str):
+    denomination = Decimal(denom_text)
+    currency_type = CurrencyType.COIN if denomination < Decimal('5') else CurrencyType.BANKNOTE
+
+    spec_exists = DenominationPackagingSpec.objects.filter(
+        currency_type=currency_type,
+        denomination=denomination,
+        enabled=True,
+    ).exists()
+    support_exists = StationDenominationSupport.objects.filter(
+        currency_type=currency_type,
+        denomination=denomination,
+        enabled=True,
+    ).exists()
+
+    if not spec_exists or not support_exists:
+        raise ValidationError(
+            f'面额 {denom_text} 缺少绑定配置：'
+            f"{'封装规格' if not spec_exists else ''}"
+            f"{'、' if (not spec_exists and not support_exists) else ''}"
+            f"{'工位支持面额' if not support_exists else ''}。"
+        )
