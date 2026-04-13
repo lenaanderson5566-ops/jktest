@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+import logging
 import random
 from typing import Dict, List, Sequence
 from uuid import uuid4
@@ -19,6 +20,9 @@ from apps.optimizer.models import (
 )
 from apps.orders.models import OrganizationOrder, SplitType
 from apps.runs.models import RunResultSummary, SortedOrderResult
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -63,6 +67,7 @@ class SortingEngine:
         'BOX_INTERVAL': 'BOX_INTERVAL_SECONDS',
         'MAX_ITERATIONS': 'MAX_ITERATIONS',
         'MAX_RESTARTS': 'MAX_RESTARTS',
+        'TRACE_ENABLED': 'SORT_TRACE_ENABLED',
     }
 
     def __init__(self, mode: OptimizeMode):
@@ -74,14 +79,24 @@ class SortingEngine:
         self.box_interval = self._load_float_config(self.CONFIG_KEYS['BOX_INTERVAL'], default=2.0)
         self.max_iterations = max(2, int(self._load_float_config(self.CONFIG_KEYS['MAX_ITERATIONS'], default=100)))
         self.max_restarts = max(1, int(self._load_float_config(self.CONFIG_KEYS['MAX_RESTARTS'], default=5)))
+        self.trace_enabled = bool(int(self._load_float_config(self.CONFIG_KEYS['TRACE_ENABLED'], default=0)))
         self.eval_count = 0
 
     def run(self, boxes: Sequence[PipelineBoxAggregate]) -> RunResultSummary:
         self.eval_count = 0
+        self._trace(
+            f'start mode={self.mode.mode_no}, boxes={len(boxes)}, '
+            f'max_iterations={self.max_iterations}, max_restarts={self.max_restarts}, '
+            f'box_interval={self.box_interval}'
+        )
         base_sequence = sorted(boxes, key=self._box_workload_seconds, reverse=True)
         best_sequence, best_eval = self._local_search(base_sequence)
         best_sequence = self._enforce_organization_continuity(best_sequence)
         best_eval = self._evaluate(best_sequence)
+        self._trace(
+            f"finish mode={self.mode.mode_no}, best_score={best_eval['score']:.4f}, "
+            f"total_seconds={best_eval['total_seconds']:.2f}, eval_count={self.eval_count}"
+        )
         return self._persist(best_sequence, best_eval)
 
     def _build_transfer_map(self) -> Dict[tuple[int, int], float]:
@@ -222,14 +237,17 @@ class SortingEngine:
 
     def _local_search(self, base_sequence: List[PipelineBoxAggregate]) -> tuple[List[PipelineBoxAggregate], dict]:
         best, best_eval = self._hill_climb(list(base_sequence))
+        self._trace(f"base hill-climb score={best_eval['score']:.4f}")
         rng = random.Random(42)
         restarts = max(0, self.max_restarts)
-        for _ in range(restarts):
+        for idx in range(restarts):
             seed_sequence = list(base_sequence)
             rng.shuffle(seed_sequence)
             trial_best, trial_eval = self._hill_climb(seed_sequence)
+            self._trace(f"restart={idx + 1}/{restarts}, trial_score={trial_eval['score']:.4f}")
             if trial_eval['score'] < best_eval['score']:
                 best, best_eval = trial_best, trial_eval
+                self._trace(f"new best from restart={idx + 1}, score={best_eval['score']:.4f}")
         return best, best_eval
 
     def _hill_climb(self, sequence: List[PipelineBoxAggregate]) -> tuple[List[PipelineBoxAggregate], dict]:
@@ -244,9 +262,14 @@ class SortingEngine:
                 if trial_eval['score'] < best_eval['score']:
                     best, best_eval = trial, trial_eval
                     improved = True
+                    self._trace(f"iteration improvement at index={i}, score={best_eval['score']:.4f}")
             if not improved:
                 break
         return best, best_eval
+
+    def _trace(self, message: str):
+        if self.trace_enabled:
+            logger.info('SortingEngine %s', message)
 
     @staticmethod
     def _enforce_organization_continuity(sequence: Sequence[PipelineBoxAggregate]) -> List[PipelineBoxAggregate]:
