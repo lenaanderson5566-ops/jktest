@@ -13,11 +13,6 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /app/
-RUN find /app/apps/orders/migrations -type f -name '0*.py' \
-    ! -name '0001_initial.py' \
-    ! -name '0002_organizationorder_qty_coin_001.py' \
-    ! -name '0003_organizationorder_long_table.py' \
-    -delete
 
 EXPOSE 8000
 
