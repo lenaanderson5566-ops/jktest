@@ -27,8 +27,7 @@
 │   │   └── asgi.py
 │   └── apps
 │       ├── masterdata
-│       ├── orders
-│       └── optimizer
+│       └── orders
 ```
 
 ## 快速启动
@@ -58,7 +57,6 @@ docker compose exec web python manage.py migrate
 
 - 主数据：`backend/apps/masterdata/models.py`
 - 订单：`backend/apps/orders/models.py`
-- 优化参数：`backend/apps/optimizer/models.py`
 
 ## Excel 导入导出
 
@@ -88,11 +86,10 @@ docker compose exec web python manage.py migrate
 - 后台新增两个列表：
   - 人工清单（支持按日期/机构/面额汇总导出）
   - 流水线箱清单（供自动化执行，支持导出）
-- 阈值配置改为主数据下“全局配置”统一编辑保存：
-  - 走人工捆数阈值(捆)（默认20）
-  - 流水线单箱捆数上限(捆)（默认16）
+- 拆分阈值使用系统默认值：
+  - 走人工捆数阈值(捆)：20
+  - 流水线单箱捆数上限(捆)：16
   - 流水线单箱捆数上限对同一订单下所有纸币面额共用，不按单个面额单独计算
-  - 英文配置键由系统内部维护，后台不暴露编辑
 
 主数据中可维护“面额封装规格”（如100元=1000张/捆，1元=500枚/包），机构订单长表导入支持填写“金额”，系统会按规格自动换算包/捆数。
 
