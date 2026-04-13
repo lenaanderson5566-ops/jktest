@@ -22,6 +22,9 @@ class OptimizeMode(models.Model):
         verbose_name = '优化模式配置'
         verbose_name_plural = verbose_name
 
+    def __str__(self):
+        return f'{self.mode_no}-{self.mode_name}'
+
 
 class ParameterCategory(models.TextChoices):
     TOTAL_TIME_WEIGHT = 'TOTAL_TIME_WEIGHT', '总耗时权重'
