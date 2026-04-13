@@ -35,7 +35,7 @@ class OrganizationOrder(models.Model):
         db_table = 'organization_order'
         verbose_name = '机构订单'
         verbose_name_plural = verbose_name
-        unique_together = ('order_no', 'currency_type', 'denomination')
+        unique_together = ('order_no', 'order_date', 'organization', 'route', 'currency_type', 'denomination')
         indexes = [
             models.Index(fields=['order_date', 'route'], name='organizatio_order_d_f8e7bc_idx'),
             models.Index(fields=['status'], name='organizatio_status_803f99_idx'),

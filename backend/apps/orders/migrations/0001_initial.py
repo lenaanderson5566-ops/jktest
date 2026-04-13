@@ -29,7 +29,7 @@ class Migration(migrations.Migration):
                 'verbose_name_plural': '机构订单',
                 'db_table': 'organization_order',
                 'indexes': [models.Index(fields=['order_date', 'route'], name='organizatio_order_d_f8e7bc_idx'), models.Index(fields=['status'], name='organizatio_status_803f99_idx')],
-                'unique_together': {('order_no', 'currency_type', 'denomination')},
+                'unique_together': {('order_no', 'order_date', 'organization', 'route', 'currency_type', 'denomination')},
             },
         ),
     ]

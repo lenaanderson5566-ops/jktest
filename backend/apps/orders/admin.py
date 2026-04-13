@@ -99,12 +99,12 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
 
                 OrganizationOrder.objects.update_or_create(
                     order_no=order_no,
+                    order_date=order_date,
+                    organization=org,
+                    route=route,
                     currency_type=currency_type,
                     denomination=denom,
                     defaults={
-                        'order_date': order_date,
-                        'organization': org,
-                        'route': route,
                         'quantity': qty,
                         'status': status,
                         'remark': remark,
@@ -189,8 +189,13 @@ def _resolve_quantity_from_row(denom_text: str, qty_raw, amount_raw) -> int:
     if units <= 0:
         raise ValueError(f'面额 {denom_text} 封装规格单位必须大于0')
 
-    amount = Decimal(str(amount_raw))
+    amount = _to_decimal(amount_raw)
     qty = amount / (denomination * units)
     if qty != qty.to_integral_value():
         raise ValueError(f'面额 {denom_text} 金额 {amount_raw} 不能换算为整数包(捆)数')
     return int(qty)
+
+
+def _to_decimal(value) -> Decimal:
+    normalized = str(value).replace(',', '').strip()
+    return Decimal(normalized)
