@@ -1,0 +1,39 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>流水线概览示意图</h1>
+  <p>按工位顺序展示，箭头上标识传输时间。</p>
+
+  <div style="display:flex;align-items:center;gap:10px;overflow-x:auto;padding:16px;border:1px solid #ddd;background:#fff;">
+    {% for item in chains %}
+      <div style="min-width:180px;border:2px solid #1f77b4;border-radius:8px;padding:10px;background:#f0f6ff;">
+        <div style="font-weight:700;">{{ item.station.station_name }}</div>
+        <div style="color:#444;">工位号：{{ item.station.station_no }}</div>
+        <div style="color:#444;">类型：{{ item.station.get_station_type_display }}</div>
+        <div style="color:#444;">固定装箱：{{ item.effective_fixed_time }}s</div>
+        <div style="color:#444;">支持面额：{{ item.supports|join:", "|default:"未配置" }}</div>
+        <div style="color:#444;">单位装箱时间：</div>
+        <ul style="margin:4px 0 0 16px;padding:0;color:#444;">
+          {% for t in item.effective_unit_times %}<li>{{ t }}</li>{% endfor %}
+        </ul>
+      </div>
+      {% if item.segment %}
+        <div style="min-width:90px;text-align:center;color:#1f77b4;font-weight:700;">
+          →<br/>{{ item.segment.fixed_transfer_seconds }}s
+        </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  <h3 style="margin-top:20px;">传输段明细</h3>
+  <table class="adminlist">
+    <thead><tr><th>起始工位</th><th>终点工位</th><th>固定传输时间(秒)</th></tr></thead>
+    <tbody>
+      {% for seg in segments %}
+        <tr><td>{{ seg.from_station.station_name }}</td><td>{{ seg.to_station.station_name }}</td><td>{{ seg.fixed_transfer_seconds }}</td></tr>
+      {% empty %}
+        <tr><td colspan="3">暂无启用传输段</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

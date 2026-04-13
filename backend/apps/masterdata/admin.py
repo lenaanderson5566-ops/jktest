@@ -1,0 +1,343 @@
+from __future__ import annotations
+
+from io import BytesIO
+
+from django.contrib import admin, messages
+from django import forms
+from django.http import HttpRequest, HttpResponse
+from django.middleware.csrf import get_token
+from django.shortcuts import redirect, render
+from django.urls import path, reverse
+from openpyxl import Workbook, load_workbook
+
+from apps.optimizer.models import GlobalConfig as OptimizerGlobalConfig
+from .models import (
+    Organization,
+    DenominationPackagingSpec,
+    PackingStation,
+    StationDenominationEfficiency,
+    StationDenominationSupport,
+    TransferSegment,
+    TransportRoute,
+)
+
+
+class MasterdataGlobalConfig(OptimizerGlobalConfig):
+    class Meta:
+        proxy = True
+        app_label = 'masterdata'
+        verbose_name = '全局配置'
+        verbose_name_plural = verbose_name
+
+
+class GlobalConfigForm(forms.Form):
+    manual_pack_threshold = forms.IntegerField(label='走人工捆数阈值(捆)', min_value=1)
+    pipeline_box_capacity = forms.IntegerField(label='流水线单箱捆数上限(捆)', min_value=1)
+    default_mode_no = forms.CharField(label='默认优化模式编号', required=False, max_length=32)
+    route_switch_penalty = forms.DecimalField(label='线路切换惩罚系数', min_value=0, decimal_places=4, max_digits=12)
+    max_restart_count = forms.IntegerField(label='最大重启次数', min_value=1)
+
+
+class ExcelMixin:
+    model_label = ''
+
+    def upload_page(self, request: HttpRequest):
+        if request.method == 'POST' and request.FILES.get('file'):
+            try:
+                self.handle_upload(request.FILES['file'])
+                messages.success(request, f'{self.model_label} 导入成功')
+            except Exception as exc:  # noqa: BLE001
+                messages.error(request, f'{self.model_label} 导入失败: {exc}')
+            return redirect('..')
+
+        token = get_token(request)
+        return HttpResponse(
+            '<h3>Excel 导入</h3>'
+            '<form method="post" enctype="multipart/form-data">'
+            f'<input type="hidden" name="csrfmiddlewaretoken" value="{token}" />'
+            f'<p>{self.model_label} 导入文件：</p>'
+            '<input type="file" name="file" accept=".xlsx" required />'
+            '<button type="submit">上传并导入</button>'
+            '</form>'
+        )
+
+
+@admin.register(TransportRoute)
+class TransportRouteAdmin(admin.ModelAdmin, ExcelMixin):
+    change_list_template = 'admin/excel_change_list.html'
+    list_display = ('route_no', 'route_name', 'enabled')
+    search_fields = ('route_no', 'route_name')
+    model_label = '押运线路'
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('import-excel/', self.admin_site.admin_view(self.upload_page), name='masterdata_transportroute_import'),
+            path('export-excel/', self.admin_site.admin_view(self.export_excel), name='masterdata_transportroute_export'),
+            path('template-excel/', self.admin_site.admin_view(self.template_excel), name='masterdata_transportroute_template'),
+        ]
+        return custom_urls + urls
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        extra_context.update({
+            'excel_import_url': reverse('admin:masterdata_transportroute_import'),
+            'excel_export_url': reverse('admin:masterdata_transportroute_export'),
+            'excel_template_url': reverse('admin:masterdata_transportroute_template'),
+        })
+        return super().changelist_view(request, extra_context)
+
+    @staticmethod
+    def handle_upload(file_obj):
+        wb = load_workbook(file_obj)
+        ws = wb.active
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or not row[0]:
+                continue
+            TransportRoute.objects.update_or_create(
+                route_no=str(row[0]).strip(),
+                defaults={
+                    'route_name': str(row[1] or '').strip(),
+                    'enabled': bool(row[2]) if row[2] is not None else True,
+                    'remark': str(row[3] or '').strip(),
+                },
+            )
+
+    def export_excel(self, request):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(['线路号', '线路名称', '是否启用', '备注'])
+        for obj in TransportRoute.objects.all().order_by('route_no'):
+            ws.append([obj.route_no, obj.route_name, obj.enabled, obj.remark])
+        return self._wb_response(wb, 'transport_route_export.xlsx')
+
+    def template_excel(self, request):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(['线路号', '线路名称', '是否启用', '备注'])
+        ws.append(['R001', '示例线路', True, '样例数据'])
+        return self._wb_response(wb, 'transport_route_template.xlsx')
+
+    @staticmethod
+    def _wb_response(wb, filename):
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = f'attachment; filename={filename}'
+        return response
+
+
+@admin.register(Organization)
+class OrganizationAdmin(admin.ModelAdmin, ExcelMixin):
+    change_list_template = 'admin/excel_change_list.html'
+    list_display = ('org_no', 'org_name', 'route', 'enabled')
+    search_fields = ('org_no', 'org_name')
+    list_filter = ('route', 'enabled')
+    model_label = '机构'
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('import-excel/', self.admin_site.admin_view(self.upload_page), name='masterdata_organization_import'),
+            path('export-excel/', self.admin_site.admin_view(self.export_excel), name='masterdata_organization_export'),
+            path('template-excel/', self.admin_site.admin_view(self.template_excel), name='masterdata_organization_template'),
+        ]
+        return custom_urls + urls
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        extra_context.update({
+            'excel_import_url': reverse('admin:masterdata_organization_import'),
+            'excel_export_url': reverse('admin:masterdata_organization_export'),
+            'excel_template_url': reverse('admin:masterdata_organization_template'),
+        })
+        return super().changelist_view(request, extra_context)
+
+    @staticmethod
+    def handle_upload(file_obj):
+        wb = load_workbook(file_obj)
+        ws = wb.active
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or not row[0]:
+                continue
+            route_no = str(row[2] or '').strip()
+            route = TransportRoute.objects.filter(route_no=route_no).first()
+            if not route:
+                raise ValueError(f'找不到线路号: {route_no}')
+            Organization.objects.update_or_create(
+                org_no=str(row[0]).strip(),
+                defaults={
+                    'org_name': str(row[1] or '').strip(),
+                    'route': route,
+                    'enabled': bool(row[3]) if row[3] is not None else True,
+                    'remark': str(row[4] or '').strip(),
+                },
+            )
+
+    def export_excel(self, request):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(['机构号', '机构名称', '所属线路号', '是否启用', '备注'])
+        for obj in Organization.objects.select_related('route').all().order_by('org_no'):
+            ws.append([obj.org_no, obj.org_name, obj.route.route_no, obj.enabled, obj.remark])
+        return TransportRouteAdmin._wb_response(wb, 'organization_export.xlsx')
+
+    def template_excel(self, request):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(['机构号', '机构名称', '所属线路号', '是否启用', '备注'])
+        ws.append(['ORG001', '示例机构', 'R001', True, '样例数据'])
+        return TransportRouteAdmin._wb_response(wb, 'organization_template.xlsx')
+
+
+@admin.register(DenominationPackagingSpec)
+class DenominationPackagingSpecAdmin(admin.ModelAdmin):
+    list_display = ('currency_type', 'denomination', 'units_per_package', 'enabled')
+    list_filter = ('currency_type', 'enabled')
+
+
+@admin.register(PackingStation)
+class PackingStationAdmin(admin.ModelAdmin):
+    list_display = ('station_no', 'station_name', 'station_order', 'station_type', 'enabled')
+    list_filter = ('station_type', 'enabled')
+
+
+@admin.register(MasterdataGlobalConfig)
+class GlobalConfigAdmin(admin.ModelAdmin):
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('settings/', self.admin_site.admin_view(self.settings_view), name='masterdata_globalconfig_settings'),
+        ]
+        return custom_urls + urls
+
+    def changelist_view(self, request, extra_context=None):
+        return redirect('admin:masterdata_globalconfig_settings')
+
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        return redirect('admin:masterdata_globalconfig_settings')
+
+    def settings_view(self, request):
+        if request.method == 'POST':
+            form = GlobalConfigForm(request.POST)
+            if form.is_valid():
+                _upsert_config('MANUAL_PACK_THRESHOLD', str(form.cleaned_data['manual_pack_threshold']), '走人工捆数阈值(捆)')
+                _upsert_config('PIPELINE_BOX_CAPACITY', str(form.cleaned_data['pipeline_box_capacity']), '流水线单箱捆数上限(捆)')
+                _upsert_config('默认优化模式编号', str(form.cleaned_data['default_mode_no']).strip(), '默认优化模式编号')
+                _upsert_config('线路切换惩罚系数', str(form.cleaned_data['route_switch_penalty']), '线路切换惩罚系数')
+                _upsert_config('最大重启次数', str(form.cleaned_data['max_restart_count']), '最大重启次数')
+                messages.success(request, '全局配置已保存')
+                return redirect('admin:masterdata_globalconfig_settings')
+        else:
+            form = GlobalConfigForm(initial={
+                'manual_pack_threshold': _read_int_config('MANUAL_PACK_THRESHOLD', 20),
+                'pipeline_box_capacity': _read_int_config('PIPELINE_BOX_CAPACITY', 16),
+                'default_mode_no': _read_str_config('默认优化模式编号', ''),
+                'route_switch_penalty': _read_decimal_config('线路切换惩罚系数', '0.2'),
+                'max_restart_count': _read_int_config('最大重启次数', 5),
+            })
+
+        return render(request, 'admin/global_config_form.html', {
+            **self.admin_site.each_context(request),
+            'title': '全局配置',
+            'form': form,
+        })
+
+
+def _read_int_config(key: str, default: int) -> int:
+    row = OptimizerGlobalConfig.objects.filter(config_key=key).first()
+    if not row:
+        return default
+    try:
+        value = int(str(row.config_value).strip())
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_decimal_config(key: str, default: str) -> str:
+    row = OptimizerGlobalConfig.objects.filter(config_key=key).first()
+    return str(row.config_value).strip() if row and str(row.config_value).strip() else default
+
+
+def _read_str_config(key: str, default: str) -> str:
+    row = OptimizerGlobalConfig.objects.filter(config_key=key).first()
+    return str(row.config_value).strip() if row else default
+
+
+def _upsert_config(key: str, value: str, remark: str):
+    OptimizerGlobalConfig.objects.update_or_create(
+        config_key=key,
+        defaults={
+            'config_value': value,
+            'enabled': True,
+            'remark': remark,
+        },
+    )
+
+
+def build_pipeline_context():
+    stations = list(PackingStation.objects.filter(enabled=True).order_by('station_order'))
+    segments = list(TransferSegment.objects.filter(enabled=True).select_related('from_station', 'to_station'))
+    seg_map = {(s.from_station_id, s.to_station_id): s for s in segments}
+
+    support_rows = StationDenominationSupport.objects.filter(enabled=True).order_by('denomination')
+    support_map = {}
+    for row in support_rows:
+        support_map.setdefault(row.station_id, []).append(f"{row.get_currency_type_display()} {row.denomination}")
+
+    eff_rows = StationDenominationEfficiency.objects.filter(enabled=True)
+    eff_map = {}
+    for row in eff_rows:
+        eff_map.setdefault(row.station_id, {})[str(row.denomination)] = float(row.unit_boxing_seconds)
+
+    chains = []
+    for idx, station in enumerate(stations):
+        next_station = stations[idx + 1] if idx + 1 < len(stations) else None
+        supports = support_map.get(station.id, [])
+        effective_unit_times = []
+        for text in supports:
+            denom = text.split()[-1]
+            unit_time = eff_map.get(station.id, {}).get(denom, float(station.unit_boxing_seconds))
+            effective_unit_times.append(f"{text}: {unit_time}s")
+        if not effective_unit_times:
+            effective_unit_times.append(f"默认: {float(station.unit_boxing_seconds)}s")
+
+        chains.append({
+            'station': station,
+            'segment': seg_map.get((station.id, next_station.id)) if next_station else None,
+            'supports': supports,
+            'effective_unit_times': effective_unit_times,
+            'effective_fixed_time': float(station.fixed_boxing_seconds),
+        })
+    return {'chains': chains, 'segments': segments}
+
+
+def pipeline_overview_page(request, admin_site):
+    return render(request, 'admin/pipeline_overview.html', {
+        **admin_site.each_context(request),
+        'title': '流水线概览示意图',
+        **build_pipeline_context(),
+    })
+
+
+@admin.register(StationDenominationSupport)
+class StationDenominationSupportAdmin(admin.ModelAdmin):
+    list_display = ('station_name', 'get_currency_type_display', 'denomination', 'enabled')
+    list_filter = ('currency_type', 'enabled')
+    search_fields = ('station__station_name', 'station__station_no')
+
+    @admin.display(description='工位名称')
+    def station_name(self, obj):
+        return obj.station.station_name
+
+
+admin.site.register(StationDenominationEfficiency)
+admin.site.register(TransferSegment)
