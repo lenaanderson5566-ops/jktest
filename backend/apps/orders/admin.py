@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
@@ -13,22 +12,15 @@ from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
 from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, Organization, TransportRoute
-from .models import OrganizationOrder, OrganizationOrderLine
+from .models import OrganizationOrder
 
 
 @admin.register(OrganizationOrder)
 class OrganizationOrderAdmin(admin.ModelAdmin):
     change_list_template = 'admin/excel_change_list.html'
-    list_display = ('order_no', 'order_date', 'organization', 'route', 'status')
+    list_display = ('order_no', 'order_date', 'organization', 'route', 'currency_type', 'denomination', 'quantity', 'status')
     search_fields = ('order_no', 'organization__org_no', 'organization__org_name')
-    list_filter = ('order_date', 'route', 'status')
-
-    class OrganizationOrderLineInline(admin.TabularInline):
-        model = OrganizationOrderLine
-        extra = 1
-        fields = ('currency_type', 'denomination', 'quantity')
-
-    inlines = [OrganizationOrderLineInline]
+    list_filter = ('order_date', 'route', 'status', 'currency_type', 'denomination')
 
     def get_urls(self):
         urls = super().get_urls()
@@ -77,65 +69,49 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         if not required.issubset(set(headers)):
             raise ValueError('请使用系统提供的长表模板导入')
 
-        grouped_orders = {}
-        grouped_lines = defaultdict(lambda: defaultdict(int))
-
         for row_no, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             try:
                 if not row:
                     continue
+
                 order_date = _to_date(row[idx['订单日期']])
                 org_no = str(row[idx['机构号']] or '').strip()
                 route_no = str(row[idx['线路号']] or '').strip()
                 if not org_no or not route_no:
                     continue
+                org = Organization.objects.filter(org_no=org_no).first()
+                route = TransportRoute.objects.filter(route_no=route_no).first()
+                if not org:
+                    raise ValueError(f'找不到机构号: {org_no}')
+                if not route:
+                    raise ValueError(f'找不到线路号: {route_no}')
 
                 order_no_col = idx.get('订单编号')
                 order_no_val = str(row[order_no_col]).strip() if order_no_col is not None and row[order_no_col] else ''
                 order_no = order_no_val or f'ORD-{order_date.strftime("%Y%m%d")}-{org_no}-{route_no}'
 
-                denom = _normalize_denomination(row[idx['面额']])
-                currency_type = CurrencyType.COIN if Decimal(denom) < Decimal('5') else CurrencyType.BANKNOTE
-                qty = _resolve_quantity_from_row(denom, row[idx.get('数量')] if idx.get('数量') is not None else None,
+                denom = Decimal(_normalize_denomination(row[idx['面额']]))
+                currency_type = CurrencyType.COIN if denom < Decimal('5') else CurrencyType.BANKNOTE
+                qty = _resolve_quantity_from_row(str(denom), row[idx.get('数量')] if idx.get('数量') is not None else None,
                                                  row[idx.get('金额')] if idx.get('金额') is not None else None)
+                status = str(row[idx.get('订单状态')] or 'NEW').strip() if idx.get('订单状态') is not None else 'NEW'
+                remark = str(row[idx.get('备注')] or '').strip() if idx.get('备注') is not None else ''
 
-                grouped_orders[order_no] = {
-                    'order_date': order_date,
-                    'org_no': org_no,
-                    'route_no': route_no,
-                    'status': str(row[idx.get('订单状态')] or 'NEW').strip() if idx.get('订单状态') is not None else 'NEW',
-                    'remark': str(row[idx.get('备注')] or '').strip() if idx.get('备注') is not None else '',
-                }
-                grouped_lines[order_no][(currency_type, Decimal(denom))] += qty
+                OrganizationOrder.objects.update_or_create(
+                    order_no=order_no,
+                    currency_type=currency_type,
+                    denomination=denom,
+                    defaults={
+                        'order_date': order_date,
+                        'organization': org,
+                        'route': route,
+                        'quantity': qty,
+                        'status': status,
+                        'remark': remark,
+                    },
+                )
             except Exception as exc:  # noqa: BLE001
                 raise ValueError(f'长表第{row_no}行导入失败：{exc}') from exc
-
-        for order_no, payload in grouped_orders.items():
-            org = Organization.objects.filter(org_no=payload['org_no']).first()
-            route = TransportRoute.objects.filter(route_no=payload['route_no']).first()
-            if not org:
-                raise ValueError(f'订单 {order_no} 找不到机构号: {payload["org_no"]}')
-            if not route:
-                raise ValueError(f'订单 {order_no} 找不到线路号: {payload["route_no"]}')
-
-            order, _ = OrganizationOrder.objects.update_or_create(
-                order_no=order_no,
-                defaults={
-                    'order_date': payload['order_date'],
-                    'organization': org,
-                    'route': route,
-                    'status': payload['status'],
-                    'remark': payload['remark'],
-                },
-            )
-            order.lines.all().delete()
-            for (currency_type, denomination), quantity in grouped_lines[order_no].items():
-                OrganizationOrderLine.objects.create(
-                    order=order,
-                    currency_type=currency_type,
-                    denomination=denomination,
-                    quantity=quantity,
-                )
 
     def export_excel(self, request):
         wb = Workbook()
@@ -143,19 +119,18 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         ws.title = '长表导出'
         ws.append(['订单编号', '订单日期', '机构号', '线路号', '面额', '数量', '订单状态', '备注'])
 
-        qs = OrganizationOrder.objects.select_related('organization', 'route').prefetch_related('lines').order_by('order_date', 'order_no')
-        for order in qs:
-            for line in order.lines.all().order_by('denomination'):
-                ws.append([
-                    order.order_no,
-                    order.order_date,
-                    order.organization.org_no,
-                    order.route.route_no,
-                    str(line.denomination),
-                    line.quantity,
-                    order.status,
-                    order.remark,
-                ])
+        qs = OrganizationOrder.objects.select_related('organization', 'route').order_by('order_date', 'order_no', 'denomination')
+        for row in qs:
+            ws.append([
+                row.order_no,
+                row.order_date,
+                row.organization.org_no,
+                row.route.route_no,
+                str(row.denomination),
+                row.quantity,
+                row.status,
+                row.remark,
+            ])
 
         return self._wb_response(wb, 'organization_order_export_long.xlsx')
 
@@ -176,13 +151,6 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         response['Content-Disposition'] = f'attachment; filename={filename}'
         return response
-
-
-@admin.register(OrganizationOrderLine)
-class OrganizationOrderLineAdmin(admin.ModelAdmin):
-    list_display = ('order', 'currency_type', 'denomination', 'quantity')
-    list_filter = ('currency_type',)
-    search_fields = ('order__order_no',)
 
 
 def _to_date(value) -> date:

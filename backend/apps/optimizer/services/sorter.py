@@ -38,6 +38,17 @@ class StationMetrics:
         return max(0.0, self.span_seconds - self.busy_seconds)
 
 
+@dataclass
+class OrderAggregate:
+    order_no: str
+    order_date: object
+    organization: object
+    route: object
+    route_id: int
+    source_order: OrganizationOrder
+    quantities: Dict[Decimal, int]
+
+
 class SortingEngine:
     """流水线排序计算引擎。"""
 
@@ -50,7 +61,7 @@ class SortingEngine:
         self.box_interval = self._load_float_config('固定上箱间隔', 2.0)
         self.max_iterations = int(self._load_float_config('最大迭代次数', 100))
 
-    def run(self, orders: Sequence[OrganizationOrder]) -> RunResultSummary:
+    def run(self, orders: Sequence[OrderAggregate]) -> RunResultSummary:
         base_sequence = sorted(orders, key=self._order_workload_seconds, reverse=True)
         best_sequence, best_eval = self._local_search(base_sequence)
         return self._persist(best_sequence, best_eval)
@@ -95,14 +106,13 @@ class SortingEngine:
         except (TypeError, ValueError):
             return default
 
-    def _order_workload_seconds(self, order: OrganizationOrder) -> float:
+    def _order_workload_seconds(self, order: OrderAggregate) -> float:
         return sum(self._station_process_seconds(order, station) for station in self.stations)
 
-    def _station_process_seconds(self, order: OrganizationOrder, station: PackingStation) -> float:
+    def _station_process_seconds(self, order: OrderAggregate, station: PackingStation) -> float:
         duration = float(station.fixed_boxing_seconds)
         eff_map = self.efficiency_map.get(station.id, {})
-        qty_map = order.denomination_quantity_map()
-        for denomination, units in qty_map.items():
+        for denomination, units in order.quantities.items():
             if not units:
                 continue
 
@@ -115,7 +125,7 @@ class SortingEngine:
 
         return duration
 
-    def _evaluate(self, sequence: Sequence[OrganizationOrder]) -> dict:
+    def _evaluate(self, sequence: Sequence[OrderAggregate]) -> dict:
         station_available = {station.id: 0.0 for station in self.stations}
         station_metrics = {station.id: StationMetrics() for station in self.stations}
         last_upbox_ready = 0.0
@@ -182,7 +192,7 @@ class SortingEngine:
         }
 
     @staticmethod
-    def _route_switch_count(sequence: Sequence[OrganizationOrder]) -> int:
+    def _route_switch_count(sequence: Sequence[OrderAggregate]) -> int:
         switches = 0
         prev = None
         for order in sequence:
@@ -191,7 +201,7 @@ class SortingEngine:
             prev = order.route_id
         return switches
 
-    def _local_search(self, base_sequence: List[OrganizationOrder]) -> tuple[List[OrganizationOrder], dict]:
+    def _local_search(self, base_sequence: List[OrderAggregate]) -> tuple[List[OrderAggregate], dict]:
         best = list(base_sequence)
         best_eval = self._evaluate(best)
 
@@ -210,7 +220,7 @@ class SortingEngine:
         return best, best_eval
 
     @transaction.atomic
-    def _persist(self, sequence: Sequence[OrganizationOrder], evaluation: dict) -> RunResultSummary:
+    def _persist(self, sequence: Sequence[OrderAggregate], evaluation: dict) -> RunResultSummary:
         batch_no = f'BATCH-{timezone.now().strftime("%Y%m%d%H%M%S")}-{str(uuid4())[:8]}'
         summary = RunResultSummary.objects.create(
             batch_no=batch_no,
@@ -237,7 +247,7 @@ class SortingEngine:
             SortedOrderResult.objects.create(
                 batch=summary,
                 seq_no=index,
-                order=order,
+                order=order.source_order,
                 order_date=order.order_date,
                 organization=order.organization,
                 route=order.route,
@@ -266,14 +276,29 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
     if mode is None:
         raise ValueError('未找到可用优化模式，请先配置 OptimizeMode。')
 
-    orders = list(
+    order_rows = list(
         OrganizationOrder.objects.filter(order_date=order_date)
         .select_related('organization', 'route')
-        .prefetch_related('lines')
-        .order_by('order_no')
+        .order_by('order_no', 'denomination')
     )
-    if not orders:
+    if not order_rows:
         raise ValueError(f'{order_date} 没有可排序订单。')
+    grouped: Dict[str, OrderAggregate] = {}
+    for row in order_rows:
+        agg = grouped.get(row.order_no)
+        if agg is None:
+            agg = OrderAggregate(
+                order_no=row.order_no,
+                order_date=row.order_date,
+                organization=row.organization,
+                route=row.route,
+                route_id=row.route_id,
+                source_order=row,
+                quantities={},
+            )
+            grouped[row.order_no] = agg
+        agg.quantities[Decimal(str(row.denomination))] = agg.quantities.get(Decimal(str(row.denomination)), 0) + int(row.quantity)
+    orders = list(grouped.values())
 
     engine = SortingEngine(mode)
     return engine.run(orders)
