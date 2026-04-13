@@ -235,16 +235,11 @@ class GlobalConfigAdmin(admin.ModelAdmin):
                 'pipeline_box_capacity': _read_int_config('PIPELINE_BOX_CAPACITY', 16),
             })
 
-        token = get_token(request)
-        return HttpResponse(
-            '<h3>全局配置</h3>'
-            '<form method="post">'
-            f'<input type="hidden" name="csrfmiddlewaretoken" value="{token}" />'
-            f'<p>{form["manual_pack_threshold"].label}: {form["manual_pack_threshold"]}</p>'
-            f'<p>{form["pipeline_box_capacity"].label}: {form["pipeline_box_capacity"]}</p>'
-            '<button type="submit">保存</button>'
-            '</form>'
-        )
+        return render(request, 'admin/global_config_form.html', {
+            **self.admin_site.each_context(request),
+            'title': '全局配置',
+            'form': form,
+        })
 
 
 def _read_int_config(key: str, default: int) -> int:
