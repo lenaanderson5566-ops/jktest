@@ -110,7 +110,7 @@ docker compose exec web python manage.py run_sorting --order-date 2026-04-10 --m
 - 后台新增两个列表：
   - 人工清单（支持按日期/机构/面额汇总导出）
   - 流水线箱清单（供自动化执行，支持导出）
-- 阈值配置改为全局配置（后台“全局配置”）：
+- 阈值配置改为主数据下“全局配置”：
   - `MANUAL_PACK_THRESHOLD`：人工包阈值（默认20）
   - `PIPELINE_BOX_CAPACITY`：流水线箱容量（默认16）
   - `PIPELINE_BOX_CAPACITY` 对同一订单下所有纸币面额共用，不按单个面额单独计算

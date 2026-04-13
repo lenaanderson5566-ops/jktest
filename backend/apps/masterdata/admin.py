@@ -9,6 +9,7 @@ from django.shortcuts import redirect, render
 from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
+from apps.optimizer.models import GlobalConfig as OptimizerGlobalConfig
 from .models import (
     Organization,
     DenominationPackagingSpec,
@@ -18,6 +19,14 @@ from .models import (
     TransferSegment,
     TransportRoute,
 )
+
+
+class MasterdataGlobalConfig(OptimizerGlobalConfig):
+    class Meta:
+        proxy = True
+        app_label = 'masterdata'
+        verbose_name = '全局配置'
+        verbose_name_plural = verbose_name
 
 
 class ExcelMixin:
@@ -183,6 +192,12 @@ class DenominationPackagingSpecAdmin(admin.ModelAdmin):
 class PackingStationAdmin(admin.ModelAdmin):
     list_display = ('station_no', 'station_name', 'station_order', 'station_type', 'enabled')
     list_filter = ('station_type', 'enabled')
+
+
+@admin.register(MasterdataGlobalConfig)
+class GlobalConfigAdmin(admin.ModelAdmin):
+    list_display = ('config_key', 'config_value', 'enabled')
+    search_fields = ('config_key',)
 
 
 def build_pipeline_context():
