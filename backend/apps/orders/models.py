@@ -97,6 +97,34 @@ class OrderSplitDetail(models.Model):
         return f'{self.order_id}-{self.split_type}-{self.seq_no}'
 
 
+class ManualPackManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(split_type=SplitType.MANUAL_PACK)
+
+
+class PipelineBoxManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(split_type=SplitType.PIPELINE_BOX)
+
+
+class ManualPackTask(OrderSplitDetail):
+    objects = ManualPackManager()
+
+    class Meta:
+        proxy = True
+        verbose_name = '人工清单'
+        verbose_name_plural = verbose_name
+
+
+class PipelineBoxTask(OrderSplitDetail):
+    objects = PipelineBoxManager()
+
+    class Meta:
+        proxy = True
+        verbose_name = '流水线箱清单'
+        verbose_name_plural = verbose_name
+
+
 class OrderImportBatch(models.Model):
     order_no = models.CharField('订单编号', max_length=64, unique=True)
     order_date = models.DateField('订单日期')

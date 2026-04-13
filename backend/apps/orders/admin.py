@@ -6,6 +6,7 @@ from io import BytesIO
 
 from django.contrib import admin, messages
 from django.db import IntegrityError
+from django.db.models import Sum
 from django.http import HttpResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect
@@ -13,7 +14,15 @@ from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
 from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, Organization, TransportRoute
-from .models import OrderImportBatch, OrderSplitDetail, OrderStatus, OrganizationOrder, SplitType
+from .models import (
+    ManualPackTask,
+    OrderImportBatch,
+    OrderSplitDetail,
+    OrderStatus,
+    OrganizationOrder,
+    PipelineBoxTask,
+    SplitType,
+)
 
 
 class OrganizationOrderInline(admin.TabularInline):
@@ -38,6 +47,135 @@ class OrderImportBatchAdmin(admin.ModelAdmin):
     search_fields = ('order_no', 'source_filename')
     list_filter = ('order_date', 'created_at')
     inlines = [OrganizationOrderInline]
+
+
+@admin.register(ManualPackTask)
+class ManualPackTaskAdmin(admin.ModelAdmin):
+    list_display = ('order_no', 'order_date', 'organization_no', 'organization_name', 'denomination', 'bundle_count')
+    list_filter = ('order__order_date', 'order__organization', 'order__denomination')
+    search_fields = ('order__order_no', 'order__organization__org_no', 'order__organization__org_name')
+
+    def get_queryset(self, request):
+        return ManualPackTask.objects.select_related('order', 'order__organization')
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('export-excel/', self.admin_site.admin_view(self.export_excel), name='orders_manual_pack_export'),
+        ]
+        return custom_urls + urls
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        extra_context.update({
+            'excel_export_url': reverse('admin:orders_manual_pack_export'),
+        })
+        return super().changelist_view(request, extra_context)
+
+    @staticmethod
+    def order_no(obj):
+        return obj.order.order_no
+
+    @staticmethod
+    def order_date(obj):
+        return obj.order.order_date
+
+    @staticmethod
+    def organization_no(obj):
+        return obj.order.organization.org_no
+
+    @staticmethod
+    def organization_name(obj):
+        return obj.order.organization.org_name
+
+    @staticmethod
+    def denomination(obj):
+        return obj.order.denomination
+
+    def export_excel(self, request):
+        rows = (
+            OrderSplitDetail.objects.filter(split_type=SplitType.MANUAL_PACK)
+            .values('order__order_date', 'order__organization__org_no', 'order__organization__org_name', 'order__denomination')
+            .annotate(total_bundles=Sum('bundle_count'))
+            .order_by('order__order_date', 'order__organization__org_no', 'order__denomination')
+        )
+        wb = Workbook()
+        ws = wb.active
+        ws.title = '人工清单'
+        ws.append(['订单日期', '机构号', '机构名称', '面额', '人工捆数汇总'])
+        for row in rows:
+            ws.append([
+                row['order__order_date'],
+                row['order__organization__org_no'],
+                row['order__organization__org_name'],
+                str(row['order__denomination']),
+                int(row['total_bundles'] or 0),
+            ])
+        return OrganizationOrderAdmin._wb_response(wb, 'manual_pack_summary.xlsx')
+
+
+@admin.register(PipelineBoxTask)
+class PipelineBoxTaskAdmin(admin.ModelAdmin):
+    list_display = ('order_no', 'order_date', 'organization_no', 'route_no', 'denomination', 'seq_no', 'bundle_count')
+    list_filter = ('order__order_date', 'order__route', 'order__organization', 'order__denomination')
+    search_fields = ('order__order_no', 'order__organization__org_no', 'order__route__route_no')
+
+    def get_queryset(self, request):
+        return PipelineBoxTask.objects.select_related('order', 'order__organization', 'order__route')
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('export-excel/', self.admin_site.admin_view(self.export_excel), name='orders_pipeline_box_export'),
+        ]
+        return custom_urls + urls
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        extra_context.update({
+            'excel_export_url': reverse('admin:orders_pipeline_box_export'),
+        })
+        return super().changelist_view(request, extra_context)
+
+    @staticmethod
+    def order_no(obj):
+        return obj.order.order_no
+
+    @staticmethod
+    def order_date(obj):
+        return obj.order.order_date
+
+    @staticmethod
+    def organization_no(obj):
+        return obj.order.organization.org_no
+
+    @staticmethod
+    def route_no(obj):
+        return obj.order.route.route_no
+
+    @staticmethod
+    def denomination(obj):
+        return obj.order.denomination
+
+    def export_excel(self, request):
+        qs = PipelineBoxTask.objects.select_related('order', 'order__organization', 'order__route').order_by(
+            'order__order_date', 'order__order_no', 'order__organization__org_no', 'order__denomination', 'seq_no'
+        )
+        wb = Workbook()
+        ws = wb.active
+        ws.title = '流水线箱清单'
+        ws.append(['订单编号', '订单日期', '机构号', '线路号', '面额', '箱序号', '箱内捆数'])
+        for row in qs:
+            ws.append([
+                row.order.order_no,
+                row.order.order_date,
+                row.order.organization.org_no,
+                row.order.route.route_no,
+                str(row.order.denomination),
+                row.seq_no,
+                row.bundle_count,
+            ])
+        return OrganizationOrderAdmin._wb_response(wb, 'pipeline_box_list.xlsx')
 
 
 @admin.register(OrganizationOrder)
