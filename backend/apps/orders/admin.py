@@ -5,6 +5,7 @@ from decimal import Decimal
 from io import BytesIO
 
 from django.contrib import admin, messages
+from django.db import IntegrityError
 from django.http import HttpResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect
@@ -97,19 +98,27 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
                 status = str(row[idx.get('订单状态')] or 'NEW').strip() if idx.get('订单状态') is not None else 'NEW'
                 remark = str(row[idx.get('备注')] or '').strip() if idx.get('备注') is not None else ''
 
-                OrganizationOrder.objects.update_or_create(
-                    order_no=order_no,
-                    order_date=order_date,
-                    organization=org,
-                    route=route,
-                    currency_type=currency_type,
-                    denomination=denom,
-                    defaults={
-                        'quantity': qty,
-                        'status': status,
-                        'remark': remark,
-                    },
-                )
+                try:
+                    OrganizationOrder.objects.update_or_create(
+                        order_no=order_no,
+                        order_date=order_date,
+                        organization=org,
+                        route=route,
+                        currency_type=currency_type,
+                        denomination=denom,
+                        defaults={
+                            'quantity': qty,
+                            'status': status,
+                            'remark': remark,
+                        },
+                    )
+                except IntegrityError as exc:
+                    if 'organization_order_order_no_currency_type' in str(exc):
+                        raise ValueError(
+                            '检测到旧版唯一索引(order_no+currency_type+denomination)。'
+                            '请先执行数据库迁移: python manage.py migrate orders 0002'
+                        ) from exc
+                    raise
             except Exception as exc:  # noqa: BLE001
                 raise ValueError(f'长表第{row_no}行导入失败：{exc}') from exc
 
