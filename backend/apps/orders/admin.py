@@ -288,8 +288,8 @@ def _normalize_denomination(value) -> str:
 
 def _get_configured_denominations() -> list[str]:
     configured = {
-        _normalize_denomination(spec.denomination)
-        for spec in DenominationPackagingSpec.objects.filter(enabled=True)
+        _normalize_denomination(support.denomination)
+        for support in StationDenominationSupport.objects.filter(enabled=True)
     }
     return [denom for denom in DENOMINATION_TO_FIELD if denom in configured]
 
