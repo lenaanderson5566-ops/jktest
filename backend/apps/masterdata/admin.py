@@ -190,12 +190,34 @@ def build_pipeline_context():
     segments = list(TransferSegment.objects.filter(enabled=True).select_related('from_station', 'to_station'))
     seg_map = {(s.from_station_id, s.to_station_id): s for s in segments}
 
+    support_rows = StationDenominationSupport.objects.filter(enabled=True).order_by('denomination')
+    support_map = {}
+    for row in support_rows:
+        support_map.setdefault(row.station_id, []).append(f"{row.get_currency_type_display()} {row.denomination}")
+
+    eff_rows = StationDenominationEfficiency.objects.filter(enabled=True)
+    eff_map = {}
+    for row in eff_rows:
+        eff_map.setdefault(row.station_id, {})[str(row.denomination)] = float(row.unit_boxing_seconds)
+
     chains = []
     for idx, station in enumerate(stations):
         next_station = stations[idx + 1] if idx + 1 < len(stations) else None
+        supports = support_map.get(station.id, [])
+        effective_unit_times = []
+        for text in supports:
+            denom = text.split()[-1]
+            unit_time = eff_map.get(station.id, {}).get(denom, float(station.unit_boxing_seconds))
+            effective_unit_times.append(f"{text}: {unit_time}s")
+        if not effective_unit_times:
+            effective_unit_times.append(f"默认: {float(station.unit_boxing_seconds)}s")
+
         chains.append({
             'station': station,
             'segment': seg_map.get((station.id, next_station.id)) if next_station else None,
+            'supports': supports,
+            'effective_unit_times': effective_unit_times,
+            'effective_fixed_time': float(station.fixed_boxing_seconds),
         })
     return {'chains': chains, 'segments': segments}
 
