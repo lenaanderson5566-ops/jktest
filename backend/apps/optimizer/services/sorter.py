@@ -40,14 +40,17 @@ class StationMetrics:
 
 
 @dataclass
-class OrderAggregate:
+class PipelineBoxAggregate:
     order_no: str
     order_date: object
     organization: object
+    organization_id: int
     route: object
     route_id: int
     source_order: OrganizationOrder
-    quantities: Dict[Decimal, int]
+    source_box_seq_no: int
+    denomination: Decimal
+    bundle_count: int
 
 
 class SortingEngine:
@@ -63,9 +66,11 @@ class SortingEngine:
         self.max_iterations = int(self._load_float_config('最大迭代次数', 100))
         self.max_restarts = int(self._load_float_config('最大重启次数', 5))
 
-    def run(self, orders: Sequence[OrderAggregate]) -> RunResultSummary:
-        base_sequence = sorted(orders, key=self._order_workload_seconds, reverse=True)
+    def run(self, boxes: Sequence[PipelineBoxAggregate]) -> RunResultSummary:
+        base_sequence = sorted(boxes, key=self._box_workload_seconds, reverse=True)
         best_sequence, best_eval = self._local_search(base_sequence)
+        best_sequence = self._enforce_organization_continuity(best_sequence)
+        best_eval = self._evaluate(best_sequence)
         return self._persist(best_sequence, best_eval)
 
     def _build_transfer_map(self) -> Dict[tuple[int, int], float]:
@@ -106,26 +111,23 @@ class SortingEngine:
         except (TypeError, ValueError):
             return default
 
-    def _order_workload_seconds(self, order: OrderAggregate) -> float:
-        return sum(self._station_process_seconds(order, station) for station in self.stations)
+    def _box_workload_seconds(self, box: PipelineBoxAggregate) -> float:
+        return sum(self._box_station_process_seconds(box, station) for station in self.stations)
 
-    def _station_process_seconds(self, order: OrderAggregate, station: PackingStation) -> float:
+    def _box_station_process_seconds(self, box: PipelineBoxAggregate, station: PackingStation) -> float:
         duration = float(station.fixed_boxing_seconds)
         eff_map = self.efficiency_map.get(station.id, {})
-        for denomination, units in order.quantities.items():
-            if not units:
-                continue
+        max_units, unit_seconds = eff_map.get(
+            box.denomination,
+            (int(station.max_units_per_action), float(station.unit_boxing_seconds)),
+        )
+        bundles = max(0, int(box.bundle_count))
+        if bundles <= 0:
+            return duration
+        batches = (bundles + max_units - 1) // max_units if max_units > 0 else bundles
+        return duration + float(batches) * unit_seconds
 
-            max_units, unit_seconds = eff_map.get(
-                denomination,
-                (int(station.max_units_per_action), float(station.unit_boxing_seconds)),
-            )
-            batches = (units + max_units - 1) // max_units if max_units > 0 else units
-            duration += float(batches) * unit_seconds
-
-        return duration
-
-    def _evaluate(self, sequence: Sequence[OrderAggregate]) -> dict:
+    def _evaluate(self, sequence: Sequence[PipelineBoxAggregate]) -> dict:
         station_available = {station.id: 0.0 for station in self.stations}
         station_metrics = {station.id: StationMetrics() for station in self.stations}
         last_upbox_ready = 0.0
@@ -145,7 +147,7 @@ class SortingEngine:
                 ready_by_flow = (prev_finish + transfer) if prev_finish is not None else max(0.0, last_upbox_ready)
                 start = max(station_available[station.id], ready_by_flow)
 
-                process = self._station_process_seconds(order, station)
+                process = self._box_station_process_seconds(order, station)
                 finish = start + process
 
                 metrics = station_metrics[station.id]
@@ -184,7 +186,7 @@ class SortingEngine:
         }
 
     @staticmethod
-    def _route_switch_count(sequence: Sequence[OrderAggregate]) -> int:
+    def _route_switch_count(sequence: Sequence[PipelineBoxAggregate]) -> int:
         switches = 0
         prev = None
         for order in sequence:
@@ -193,7 +195,7 @@ class SortingEngine:
             prev = order.route_id
         return switches
 
-    def _local_search(self, base_sequence: List[OrderAggregate]) -> tuple[List[OrderAggregate], dict]:
+    def _local_search(self, base_sequence: List[PipelineBoxAggregate]) -> tuple[List[PipelineBoxAggregate], dict]:
         best, best_eval = self._hill_climb(list(base_sequence))
         rng = random.Random(42)
         restarts = max(0, self.max_restarts)
@@ -205,7 +207,7 @@ class SortingEngine:
                 best, best_eval = trial_best, trial_eval
         return best, best_eval
 
-    def _hill_climb(self, sequence: List[OrderAggregate]) -> tuple[List[OrderAggregate], dict]:
+    def _hill_climb(self, sequence: List[PipelineBoxAggregate]) -> tuple[List[PipelineBoxAggregate], dict]:
         best = list(sequence)
         best_eval = self._evaluate(best)
         for _ in range(self.max_iterations):
@@ -221,8 +223,22 @@ class SortingEngine:
                 break
         return best, best_eval
 
+    @staticmethod
+    def _enforce_organization_continuity(sequence: Sequence[PipelineBoxAggregate]) -> List[PipelineBoxAggregate]:
+        grouped: dict[int, list[PipelineBoxAggregate]] = {}
+        org_order: list[int] = []
+        for item in sequence:
+            if item.organization_id not in grouped:
+                grouped[item.organization_id] = []
+                org_order.append(item.organization_id)
+            grouped[item.organization_id].append(item)
+        compacted: list[PipelineBoxAggregate] = []
+        for org_id in org_order:
+            compacted.extend(grouped[org_id])
+        return compacted
+
     @transaction.atomic
-    def _persist(self, sequence: Sequence[OrderAggregate], evaluation: dict) -> RunResultSummary:
+    def _persist(self, sequence: Sequence[PipelineBoxAggregate], evaluation: dict) -> RunResultSummary:
         batch_no = f'BATCH-{timezone.now().strftime("%Y%m%d%H%M%S")}-{str(uuid4())[:8]}'
         summary = RunResultSummary.objects.create(
             batch_no=batch_no,
@@ -257,7 +273,7 @@ class SortingEngine:
                 est_start_time=base_dt + timedelta(seconds=start_seconds),
                 est_finish_time=base_dt + timedelta(seconds=finish_seconds),
                 est_total_seconds=Decimal(str(round(finish_seconds - start_seconds, 2))),
-                remark='自动排序结果',
+                remark=f'按箱排序-原箱序号:{order.source_box_seq_no}',
             )
 
         return summary
@@ -286,32 +302,33 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
     )
     if not order_rows:
         raise ValueError(f'{order_date} 没有可排序订单。')
-    grouped: Dict[tuple[str, object, int, int], OrderAggregate] = {}
+    boxes: list[PipelineBoxAggregate] = []
     for row in order_rows:
-        group_key = (row.order_no, row.order_date, row.organization_id, row.route_id)
-        agg = grouped.get(group_key)
-        if agg is None:
-            agg = OrderAggregate(
-                order_no=row.order_no,
-                order_date=row.order_date,
-                organization=row.organization,
-                route=row.route,
-                route_id=row.route_id,
-                source_order=row,
-                quantities={},
-            )
-            grouped[group_key] = agg
-        pipeline_qty = sum(
-            int(item.bundle_count)
-            for item in row.split_details.all()
-            if item.split_type == SplitType.PIPELINE_BOX
+        pipeline_boxes = sorted(
+            [
+                detail
+                for detail in row.split_details.all()
+                if detail.split_type == SplitType.PIPELINE_BOX and int(detail.bundle_count) > 0
+            ],
+            key=lambda item: item.seq_no,
         )
-        if pipeline_qty <= 0:
-            continue
-        agg.quantities[Decimal(str(row.denomination))] = agg.quantities.get(Decimal(str(row.denomination)), 0) + pipeline_qty
-    orders = [item for item in grouped.values() if item.quantities]
-    if not orders:
+        for box in pipeline_boxes:
+            boxes.append(
+                PipelineBoxAggregate(
+                    order_no=row.order_no,
+                    order_date=row.order_date,
+                    organization=row.organization,
+                    organization_id=row.organization_id,
+                    route=row.route,
+                    route_id=row.route_id,
+                    source_order=row,
+                    source_box_seq_no=box.seq_no,
+                    denomination=Decimal(str(row.denomination)),
+                    bundle_count=int(box.bundle_count),
+                )
+            )
+    if not boxes:
         raise ValueError(f'{order_date} 没有可进入流水线的订单明细。')
 
     engine = SortingEngine(mode)
-    return engine.run(orders)
+    return engine.run(boxes)

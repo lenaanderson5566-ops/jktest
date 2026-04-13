@@ -47,6 +47,7 @@ class SortedOrderResultAdmin(admin.ModelAdmin):
         'seq_no',
         'final_position',
         'sort_change',
+        'remark',
         'order_date',
         'batch_link',
         'order',
@@ -63,6 +64,7 @@ class SortedOrderResultAdmin(admin.ModelAdmin):
         'organization__organization_no',
         'organization__organization_name',
         'route__route_no',
+        'remark',
     )
     ordering = ('-order_date', 'final_position', 'seq_no')
     list_select_related = ('batch', 'order', 'organization', 'route')

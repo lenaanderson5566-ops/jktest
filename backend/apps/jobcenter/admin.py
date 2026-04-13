@@ -43,8 +43,9 @@ class SortingJobAdmin(admin.ModelAdmin):
         summary = RunResultSummary.objects.filter(batch_no=obj.result_batch_no).first()
         if not summary:
             return obj.result_batch_no
-        url = reverse('admin:runs_runresultsummary_change', args=[summary.id])
-        return format_html('<a href="{}">{}</a>', url, obj.result_batch_no)
+        changelist_url = reverse('admin:runs_sortedorderresult_changelist')
+        result_url = f'{changelist_url}?batch__id__exact={summary.id}'
+        return format_html('<a href="{}">{}</a>', result_url, obj.result_batch_no)
 
     @admin.display(description='总时长(秒)')
     def total_seconds_display(self, obj):
