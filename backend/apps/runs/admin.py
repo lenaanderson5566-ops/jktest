@@ -1,30 +1,7 @@
 from django.contrib import admin
-from django.urls import reverse
-from django.utils.html import format_html
 from datetime import timedelta
 
-from .models import RunResultSummary, SortedOrderResult
-
-
-@admin.register(RunResultSummary)
-class RunResultSummaryAdmin(admin.ModelAdmin):
-    list_display = (
-        'batch_no',
-        'run_at',
-        'optimize_mode',
-        'score',
-        'total_seconds',
-        'is_best',
-        'sorted_order_count',
-    )
-    list_filter = ('is_best', 'optimize_mode', 'run_at')
-    search_fields = ('batch_no', 'remark')
-    ordering = ('-run_at',)
-    readonly_fields = ('batch_no', 'run_at', 'score', 'total_seconds')
-
-    @admin.display(description='排序订单数')
-    def sorted_order_count(self, obj):
-        return obj.sorted_orders.count()
+from .models import SortedOrderResult
 
 
 @admin.register(SortedOrderResult)
@@ -35,7 +12,8 @@ class SortedOrderResultAdmin(admin.ModelAdmin):
         'sort_change',
         'remark',
         'order_date',
-        'batch_link',
+        'batch_no',
+        'optimize_mode',
         'order',
         'organization',
         'route',
@@ -44,9 +22,9 @@ class SortedOrderResultAdmin(admin.ModelAdmin):
         'est_finish_duration',
         'est_total_seconds',
     )
-    list_filter = ('order_date', 'batch__optimize_mode', 'route', 'batch')
+    list_filter = ('order_date', 'optimize_mode', 'route', 'batch_no')
     search_fields = (
-        'batch__batch_no',
+        'batch_no',
         'order__order_no',
         'organization__organization_no',
         'organization__organization_name',
@@ -54,12 +32,7 @@ class SortedOrderResultAdmin(admin.ModelAdmin):
         'remark',
     )
     ordering = ('-order_date', 'final_position', 'seq_no')
-    list_select_related = ('batch', 'order', 'organization', 'route')
-
-    @admin.display(description='运行批次')
-    def batch_link(self, obj):
-        url = reverse('admin:runs_runresultsummary_change', args=[obj.batch_id])
-        return format_html('<a href="{}">{}</a>', url, obj.batch.batch_no)
+    list_select_related = ('optimize_mode', 'order', 'organization', 'route')
 
     @admin.display(description='排序变化')
     def sort_change(self, obj):

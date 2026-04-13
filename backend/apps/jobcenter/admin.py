@@ -7,7 +7,6 @@ from django.utils.html import format_html
 
 from .models import SortingJob, SortingJobStatus
 from .services.job_runner import start_sorting_job_in_background
-from apps.runs.models import RunResultSummary
 
 
 @admin.action(description='将选中任务放入后台执行')
@@ -40,19 +39,13 @@ class SortingJobAdmin(admin.ModelAdmin):
     def result_batch_link(self, obj):
         if not obj.result_batch_no:
             return '-'
-        summary = RunResultSummary.objects.filter(batch_no=obj.result_batch_no).first()
-        if not summary:
-            return obj.result_batch_no
         changelist_url = reverse('admin:runs_sortedorderresult_changelist')
-        result_url = f'{changelist_url}?batch__id__exact={summary.id}'
+        result_url = f'{changelist_url}?batch_no__exact={obj.result_batch_no}'
         return format_html('<a href="{}">{}</a>', result_url, obj.result_batch_no)
 
     @admin.display(description='总时长(秒)')
     def total_seconds_display(self, obj):
-        if not obj.result_batch_no:
-            return '-'
-        summary = RunResultSummary.objects.filter(batch_no=obj.result_batch_no).values_list('total_seconds', flat=True).first()
-        return summary if summary is not None else '-'
+        return '-'
 
     def save_model(self, request, obj, form, change):
         is_new = obj.pk is None

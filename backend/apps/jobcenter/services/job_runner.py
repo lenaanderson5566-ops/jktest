@@ -41,8 +41,8 @@ def _run_job(job_id: int):
     try:
         summary = run_sorting_for_date(job.order_date, job.mode.mode_no if job.mode else None)
         job.status = SortingJobStatus.SUCCESS
-        job.result_batch_no = summary.batch_no
-        job.message = f'排序完成: score={summary.score}'
+        job.result_batch_no = summary['batch_no']
+        job.message = f"排序完成: score={summary['score']}"
     except Exception as exc:  # noqa: BLE001
         job.status = SortingJobStatus.FAILED
         job.message = str(exc)[:255]

@@ -4,7 +4,7 @@ from apps.optimizer.services.sorter import run_sorting_for_date
 
 
 class Command(BaseCommand):
-    help = '执行指定日期订单排序计算，并写入运行评估与排序结果表'
+    help = '执行指定日期订单排序计算，并写入排序结果表'
 
     def add_arguments(self, parser):
         parser.add_argument('--order-date', required=True, help='订单日期，格式 YYYY-MM-DD')
@@ -17,5 +17,5 @@ class Command(BaseCommand):
             raise CommandError(str(exc)) from exc
 
         self.stdout.write(self.style.SUCCESS(
-            f'排序完成: batch={summary.batch_no}, total_seconds={summary.total_seconds}, score={summary.score}'
+            f"排序完成: batch={summary['batch_no']}, total_seconds={summary['total_seconds']}, score={summary['score']}"
         ))

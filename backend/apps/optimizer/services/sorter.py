@@ -19,7 +19,7 @@ from apps.optimizer.models import (
     ParameterCategory,
 )
 from apps.orders.models import OrganizationOrder, SplitType
-from apps.runs.models import RunResultSummary, SortedOrderResult
+from apps.runs.models import SortedOrderResult
 
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ class SortingEngine:
         self.t12_smooth_weight = self._load_float_config(self.CONFIG_KEYS['T12_SMOOTH_WEIGHT'], default=0.05)
         self.eval_count = 0
 
-    def run(self, boxes: Sequence[PipelineBoxAggregate]) -> RunResultSummary:
+    def run(self, boxes: Sequence[PipelineBoxAggregate]) -> dict:
         self.eval_count = 0
         self._trace(
             f'start mode={self.mode.mode_no}, boxes={len(boxes)}, '
@@ -419,26 +419,22 @@ class SortingEngine:
         return compacted
 
     @transaction.atomic
-    def _persist(self, sequence: Sequence[PipelineBoxAggregate], evaluation: dict) -> RunResultSummary:
+    def _persist(self, sequence: Sequence[PipelineBoxAggregate], evaluation: dict) -> dict:
         batch_no = f'BATCH-{timezone.now().strftime("%Y%m%d%H%M%S")}-{str(uuid4())[:8]}'
-        summary = RunResultSummary.objects.create(
-            batch_no=batch_no,
-            optimize_mode=self.mode,
-            total_seconds=Decimal(str(round(evaluation['total_seconds'], 2))),
-            score=Decimal(str(round(evaluation['score'], 4))),
-            is_best=True,
-            remark=(
-                '自动排序计算结果; '
-                f'eval_count={self.eval_count}; max_iterations={self.max_iterations}; max_restarts={self.max_restarts}; '
-                f'total_w={self.weights.get(ParameterCategory.TOTAL_TIME_WEIGHT, 0)}; '
-                f'route_w={self.weights.get(ParameterCategory.ROUTE_CONTINUITY_WEIGHT, 0)}; '
-                f'adj_w={self.adj_complement_weight}; '
-                f't12_w={self.t12_smooth_weight}; '
-                f'station_focus={len(self.station_focus_weights)}'
-            )[:255],
-        )
+        run_at = timezone.now()
+        total_seconds = Decimal(str(round(evaluation['total_seconds'], 2)))
+        score = Decimal(str(round(evaluation['score'], 4)))
+        remark = (
+            '自动排序计算结果; '
+            f'eval_count={self.eval_count}; max_iterations={self.max_iterations}; max_restarts={self.max_restarts}; '
+            f'total_w={self.weights.get(ParameterCategory.TOTAL_TIME_WEIGHT, 0)}; '
+            f'route_w={self.weights.get(ParameterCategory.ROUTE_CONTINUITY_WEIGHT, 0)}; '
+            f'adj_w={self.adj_complement_weight}; '
+            f't12_w={self.t12_smooth_weight}; '
+            f'station_focus={len(self.station_focus_weights)}'
+        )[:255]
 
-        base_dt = self._resolve_schedule_base_datetime(sequence) or summary.run_at
+        base_dt = self._resolve_schedule_base_datetime(sequence) or run_at
         for index, (order, start_seconds, finish_seconds) in enumerate(evaluation['timings'], start=1):
             start_seconds = round(start_seconds, 2)
             finish_seconds = round(finish_seconds, 2)
@@ -447,7 +443,8 @@ class SortingEngine:
                 for (currency_type, denom), qty in sorted(order.denomination_items.items(), key=lambda item: (item[0][0], item[0][1]), reverse=True)
             )
             SortedOrderResult.objects.create(
-                batch=summary,
+                batch_no=batch_no,
+                optimize_mode=self.mode,
                 seq_no=index,
                 order=order.source_order,
                 order_date=order.order_date,
@@ -457,10 +454,15 @@ class SortingEngine:
                 est_start_time=base_dt + timedelta(seconds=start_seconds),
                 est_finish_time=base_dt + timedelta(seconds=finish_seconds),
                 est_total_seconds=Decimal(str(finish_seconds)),
-                remark=(f'按逻辑箱聚合排序-原箱序号:{order.source_box_seq_no}; 面额明细:{denom_desc}')[:255],
+                remark=(f'{remark}; 按逻辑箱聚合排序-原箱序号:{order.source_box_seq_no}; 面额明细:{denom_desc}')[:255],
             )
 
-        return summary
+        return {
+            'batch_no': batch_no,
+            'run_at': run_at,
+            'total_seconds': total_seconds,
+            'score': score,
+        }
 
     def _resolve_schedule_base_datetime(self, sequence: Sequence[PipelineBoxAggregate]):
         if not sequence:
@@ -471,7 +473,7 @@ class SortingEngine:
         return timezone.make_aware(base_naive, tz)
 
 
-def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSummary:
+def run_sorting_for_date(order_date, mode_no: str | None = None) -> dict:
     if isinstance(order_date, str):
         order_date = datetime.strptime(order_date, '%Y-%m-%d').date()
     mode = None

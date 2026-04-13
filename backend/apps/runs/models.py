@@ -5,23 +5,16 @@ from apps.optimizer.models import OptimizeMode
 from apps.orders.models import OrganizationOrder
 
 
-class RunResultSummary(models.Model):
-    batch_no = models.CharField('运行批次号', max_length=64, unique=True)
-    run_at = models.DateTimeField('运行日期时间', auto_now_add=True)
-    optimize_mode = models.ForeignKey(OptimizeMode, on_delete=models.PROTECT, related_name='run_summaries', verbose_name='优化模式')
-    total_seconds = models.DecimalField('运行总耗时(秒)', max_digits=12, decimal_places=2)
-    score = models.DecimalField('综合评分', max_digits=12, decimal_places=4)
-    is_best = models.BooleanField('是否最优方案', default=False)
-    remark = models.CharField('备注', max_length=255, blank=True)
-
-    class Meta:
-        db_table = 'run_result_summary'
-        verbose_name = '排序运行结果主评估'
-        verbose_name_plural = verbose_name
-
-
 class SortedOrderResult(models.Model):
-    batch = models.ForeignKey(RunResultSummary, on_delete=models.CASCADE, related_name='sorted_orders', verbose_name='运行批次')
+    batch_no = models.CharField('运行批次号', max_length=64, db_index=True)
+    optimize_mode = models.ForeignKey(
+        OptimizeMode,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name='sorted_order_results',
+        verbose_name='优化模式',
+    )
     seq_no = models.PositiveIntegerField('排序序号')
     order = models.ForeignKey(OrganizationOrder, on_delete=models.PROTECT, related_name='sorted_results', verbose_name='订单')
     order_date = models.DateField('订单日期')
@@ -37,5 +30,5 @@ class SortedOrderResult(models.Model):
         db_table = 'sorted_order_result'
         verbose_name = '排序结果'
         verbose_name_plural = verbose_name
-        unique_together = ('batch', 'seq_no')
+        unique_together = ('batch_no', 'seq_no')
         indexes = [models.Index(fields=['order_date', 'route'], name='sorted_orde_order_d_ed21c7_idx')]
