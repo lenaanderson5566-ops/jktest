@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 from django.contrib import admin, messages
+from django import forms
 from django.http import HttpRequest, HttpResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
@@ -27,6 +28,11 @@ class MasterdataGlobalConfig(OptimizerGlobalConfig):
         app_label = 'masterdata'
         verbose_name = '全局配置'
         verbose_name_plural = verbose_name
+
+
+class SplitConfigForm(forms.Form):
+    manual_pack_threshold = forms.IntegerField(label='走人工捆数阈值(捆)', min_value=1)
+    pipeline_box_capacity = forms.IntegerField(label='流水线单箱捆数上限(捆)', min_value=1)
 
 
 class ExcelMixin:
@@ -196,8 +202,71 @@ class PackingStationAdmin(admin.ModelAdmin):
 
 @admin.register(MasterdataGlobalConfig)
 class GlobalConfigAdmin(admin.ModelAdmin):
-    list_display = ('config_key', 'config_value', 'enabled')
-    search_fields = ('config_key',)
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('settings/', self.admin_site.admin_view(self.settings_view), name='masterdata_globalconfig_settings'),
+        ]
+        return custom_urls + urls
+
+    def changelist_view(self, request, extra_context=None):
+        return redirect('admin:masterdata_globalconfig_settings')
+
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        return redirect('admin:masterdata_globalconfig_settings')
+
+    def settings_view(self, request):
+        if request.method == 'POST':
+            form = SplitConfigForm(request.POST)
+            if form.is_valid():
+                _upsert_config('MANUAL_PACK_THRESHOLD', str(form.cleaned_data['manual_pack_threshold']), '走人工捆数阈值(捆)')
+                _upsert_config('PIPELINE_BOX_CAPACITY', str(form.cleaned_data['pipeline_box_capacity']), '流水线单箱捆数上限(捆)')
+                messages.success(request, '全局配置已保存')
+                return redirect('admin:masterdata_globalconfig_settings')
+        else:
+            form = SplitConfigForm(initial={
+                'manual_pack_threshold': _read_int_config('MANUAL_PACK_THRESHOLD', 20),
+                'pipeline_box_capacity': _read_int_config('PIPELINE_BOX_CAPACITY', 16),
+            })
+
+        token = get_token(request)
+        return HttpResponse(
+            '<h3>全局配置</h3>'
+            '<form method="post">'
+            f'<input type="hidden" name="csrfmiddlewaretoken" value="{token}" />'
+            f'<p>{form["manual_pack_threshold"].label}: {form["manual_pack_threshold"]}</p>'
+            f'<p>{form["pipeline_box_capacity"].label}: {form["pipeline_box_capacity"]}</p>'
+            '<button type="submit">保存</button>'
+            '</form>'
+        )
+
+
+def _read_int_config(key: str, default: int) -> int:
+    row = OptimizerGlobalConfig.objects.filter(config_key=key).first()
+    if not row:
+        return default
+    try:
+        value = int(str(row.config_value).strip())
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _upsert_config(key: str, value: str, remark: str):
+    OptimizerGlobalConfig.objects.update_or_create(
+        config_key=key,
+        defaults={
+            'config_value': value,
+            'enabled': True,
+            'remark': remark,
+        },
+    )
 
 
 def build_pipeline_context():
