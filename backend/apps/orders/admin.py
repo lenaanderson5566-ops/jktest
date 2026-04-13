@@ -13,7 +13,7 @@ from django.urls import path, reverse
 from openpyxl import Workbook, load_workbook
 
 from apps.masterdata.models import CurrencyType, DenominationPackagingSpec, Organization, TransportRoute
-from .models import OrganizationOrder
+from .models import OrderStatus, OrganizationOrder
 
 
 @admin.register(OrganizationOrder)
@@ -87,15 +87,12 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
                 if not route:
                     raise ValueError(f'找不到线路号: {route_no}')
 
-                order_no_col = idx.get('订单编号')
-                order_no_val = str(row[order_no_col]).strip() if order_no_col is not None and row[order_no_col] else ''
-                order_no = order_no_val or f'ORD-{order_date.strftime("%Y%m%d")}-{org_no}-{route_no}'
+                order_no = _system_order_no(order_date, org_no, route_no)
 
                 denom = Decimal(_normalize_denomination(row[idx['面额']]))
                 currency_type = CurrencyType.COIN if denom < Decimal('5') else CurrencyType.BANKNOTE
                 qty = _resolve_quantity_from_row(str(denom), row[idx.get('数量')] if idx.get('数量') is not None else None,
                                                  row[idx.get('金额')] if idx.get('金额') is not None else None)
-                status = str(row[idx.get('订单状态')] or 'NEW').strip() if idx.get('订单状态') is not None else 'NEW'
                 remark = str(row[idx.get('备注')] or '').strip() if idx.get('备注') is not None else ''
 
                 try:
@@ -108,7 +105,7 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
                         denomination=denom,
                         defaults={
                             'quantity': qty,
-                            'status': status,
+                            'status': OrderStatus.NEW,
                             'remark': remark,
                         },
                     )
@@ -147,9 +144,9 @@ class OrganizationOrderAdmin(admin.ModelAdmin):
         wb = Workbook()
         ws = wb.active
         ws.title = '长表样例'
-        ws.append(['订单编号', '订单日期', '机构号', '线路号', '面额', '数量', '金额', '订单状态', '备注'])
-        ws.append(['ORD20260410001', '2026-04-10', 'ORG001', 'R001', 100, 10, '', 'NEW', '长表数量样例'])
-        ws.append(['ORD20260410001', '2026-04-10', 'ORG001', 'R001', 0.5, '', 500, 'NEW', '长表金额样例'])
+        ws.append(['订单日期', '机构号', '线路号', '面额', '数量', '金额', '备注'])
+        ws.append(['2026-04-10', 'ORG001', 'R001', 100, 10, '', '长表数量样例'])
+        ws.append(['2026-04-10', 'ORG001', 'R001', 0.5, '', 500, '长表金额样例'])
         return self._wb_response(wb, 'organization_order_template_long.xlsx')
 
     @staticmethod
@@ -208,3 +205,7 @@ def _resolve_quantity_from_row(denom_text: str, qty_raw, amount_raw) -> int:
 def _to_decimal(value) -> Decimal:
     normalized = str(value).replace(',', '').strip()
     return Decimal(normalized)
+
+
+def _system_order_no(order_date: date, org_no: str, route_no: str) -> str:
+    return f'ORD{order_date.strftime("%Y%m%d")}-{org_no}-{route_no}'
