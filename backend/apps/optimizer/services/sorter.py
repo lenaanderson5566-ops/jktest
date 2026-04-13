@@ -202,16 +202,20 @@ class SortingEngine:
         total_seconds = max(station_available.values(), default=0.0)
         concentration = self._station_concentration_penalty(station_metrics)
         route_switch = self._route_switch_count(sequence)
+        route_switch_penalty = self.weights[ParameterCategory.ROUTE_CONTINUITY_WEIGHT] * route_switch
 
         score = (
             self.weights[ParameterCategory.TOTAL_TIME_WEIGHT] * total_seconds
             + concentration
-            + self.weights[ParameterCategory.ROUTE_CONTINUITY_WEIGHT] * route_switch
+            + route_switch_penalty
         )
 
         return {
             'score': score,
             'total_seconds': total_seconds,
+            'concentration_penalty': concentration,
+            'route_switch_count': route_switch,
+            'route_switch_penalty': route_switch_penalty,
             'station_metrics': station_metrics,
             'timings': order_timings,
         }
@@ -245,7 +249,7 @@ class SortingEngine:
             rng.shuffle(seed_sequence)
             trial_best, trial_eval = self._hill_climb(seed_sequence)
             self._trace(f"restart={idx + 1}/{restarts}, trial_score={trial_eval['score']:.4f}")
-            if trial_eval['score'] < best_eval['score']:
+            if self._is_better_eval(trial_eval, best_eval):
                 best, best_eval = trial_best, trial_eval
                 self._trace(f"new best from restart={idx + 1}, score={best_eval['score']:.4f}")
         return best, best_eval
@@ -259,13 +263,39 @@ class SortingEngine:
                 trial = list(best)
                 trial[i], trial[i + 1] = trial[i + 1], trial[i]
                 trial_eval = self._evaluate(trial)
-                if trial_eval['score'] < best_eval['score']:
+                if self._is_better_eval(trial_eval, best_eval):
                     best, best_eval = trial, trial_eval
                     improved = True
                     self._trace(f"iteration improvement at index={i}, score={best_eval['score']:.4f}")
+                if i + 2 < len(best):
+                    inserted = list(best)
+                    moved = inserted.pop(i)
+                    inserted.insert(i + 2, moved)
+                    inserted_eval = self._evaluate(inserted)
+                    if self._is_better_eval(inserted_eval, best_eval):
+                        best, best_eval = inserted, inserted_eval
+                        improved = True
+                        self._trace(f"iteration insertion improvement from index={i}, score={best_eval['score']:.4f}")
             if not improved:
                 break
         return best, best_eval
+
+    def _is_better_eval(self, left: dict, right: dict) -> bool:
+        if left['score'] < right['score'] - 1e-9:
+            return True
+        if abs(left['score'] - right['score']) > 1e-9:
+            return False
+        left_tuple = (
+            left.get('concentration_penalty', 0.0),
+            left.get('route_switch_count', 0),
+            left.get('total_seconds', 0.0),
+        )
+        right_tuple = (
+            right.get('concentration_penalty', 0.0),
+            right.get('route_switch_count', 0),
+            right.get('total_seconds', 0.0),
+        )
+        return left_tuple < right_tuple
 
     def _trace(self, message: str):
         if self.trace_enabled:
