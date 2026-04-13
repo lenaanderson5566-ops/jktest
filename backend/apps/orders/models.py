@@ -27,16 +27,6 @@ class OrganizationOrder(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT, related_name='orders', verbose_name='机构')
     route = models.ForeignKey(TransportRoute, on_delete=models.PROTECT, related_name='orders', verbose_name='线路')
 
-    qty_100 = models.PositiveIntegerField('100元捆数', default=0)
-    qty_50 = models.PositiveIntegerField('50元捆数', default=0)
-    qty_20 = models.PositiveIntegerField('20元捆数', default=0)
-    qty_10 = models.PositiveIntegerField('10元捆数', default=0)
-    qty_5 = models.PositiveIntegerField('5元捆数', default=0)
-    qty_coin_1 = models.PositiveIntegerField('1元包数', default=0)
-    qty_coin_05 = models.PositiveIntegerField('0.5元包数', default=0)
-    qty_coin_01 = models.PositiveIntegerField('0.1元包数', default=0)
-    qty_coin_001 = models.PositiveIntegerField('0.01元包数', default=0)
-
     status = models.CharField('订单状态', max_length=16, choices=OrderStatus.choices, default=OrderStatus.NEW)
     remark = models.CharField('备注', max_length=255, blank=True)
 
@@ -52,22 +42,32 @@ class OrganizationOrder(models.Model):
     def __str__(self):
         return self.order_no
 
+    def denomination_quantity_map(self) -> dict[Decimal, int]:
+        result: dict[Decimal, int] = {}
+        for line in self.lines.all():
+            result[Decimal(str(line.denomination))] = int(line.quantity)
+        return result
+
+
+class OrganizationOrderLine(models.Model):
+    order = models.ForeignKey(OrganizationOrder, on_delete=models.CASCADE, related_name='lines', verbose_name='订单')
+    currency_type = models.CharField('币种类型', max_length=16, choices=CurrencyType.choices)
+    denomination = models.DecimalField('面额', max_digits=8, decimal_places=2)
+    quantity = models.PositiveIntegerField('数量', default=0)
+
+    class Meta:
+        db_table = 'organization_order_line'
+        verbose_name = '机构订单明细'
+        verbose_name_plural = verbose_name
+        unique_together = ('order', 'currency_type', 'denomination')
+
+    def __str__(self):
+        return f'{self.order.order_no}-{self.denomination}'
+
     def clean(self):
         super().clean()
-        checks = {
-            '100': self.qty_100,
-            '50': self.qty_50,
-            '20': self.qty_20,
-            '10': self.qty_10,
-            '5': self.qty_5,
-            '1': self.qty_coin_1,
-            '0.5': self.qty_coin_05,
-            '0.1': self.qty_coin_01,
-            '0.01': self.qty_coin_001,
-        }
-        for denom_text, qty in checks.items():
-            if qty and qty > 0:
-                _validate_denomination_binding(denom_text)
+        if self.quantity and self.quantity > 0:
+            _validate_denomination_binding(str(self.denomination))
 
 
 def _validate_denomination_binding(denom_text: str):

@@ -20,19 +20,6 @@ from apps.orders.models import OrganizationOrder
 from apps.runs.models import RunResultStationDetail, RunResultSummary, SortedOrderResult
 
 
-DENOMINATION_FIELDS = {
-    Decimal('100'): 'qty_100',
-    Decimal('50'): 'qty_50',
-    Decimal('20'): 'qty_20',
-    Decimal('10'): 'qty_10',
-    Decimal('5'): 'qty_5',
-    Decimal('1'): 'qty_coin_1',
-    Decimal('0.5'): 'qty_coin_05',
-    Decimal('0.1'): 'qty_coin_01',
-    Decimal('0.01'): 'qty_coin_001',
-}
-
-
 @dataclass
 class StationMetrics:
     busy_seconds: float = 0.0
@@ -114,9 +101,8 @@ class SortingEngine:
     def _station_process_seconds(self, order: OrganizationOrder, station: PackingStation) -> float:
         duration = float(station.fixed_boxing_seconds)
         eff_map = self.efficiency_map.get(station.id, {})
-
-        for denomination, field_name in DENOMINATION_FIELDS.items():
-            units = getattr(order, field_name, 0)
+        qty_map = order.denomination_quantity_map()
+        for denomination, units in qty_map.items():
             if not units:
                 continue
 
@@ -281,7 +267,10 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
         raise ValueError('未找到可用优化模式，请先配置 OptimizeMode。')
 
     orders = list(
-        OrganizationOrder.objects.filter(order_date=order_date).select_related('organization', 'route').order_by('order_no')
+        OrganizationOrder.objects.filter(order_date=order_date)
+        .select_related('organization', 'route')
+        .prefetch_related('lines')
+        .order_by('order_no')
     )
     if not orders:
         raise ValueError(f'{order_date} 没有可排序订单。')
