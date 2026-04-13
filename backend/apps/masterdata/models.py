@@ -28,6 +28,9 @@ class Organization(models.Model):
         verbose_name = '机构'
         verbose_name_plural = verbose_name
 
+    def __str__(self):
+        return f'{self.org_no}-{self.org_name}'
+
 
 class StationType(models.TextChoices):
     MANUAL = 'MANUAL', '人工'
@@ -50,6 +53,9 @@ class PackingStation(models.Model):
         db_table = 'packing_station'
         verbose_name = '装箱工位'
         verbose_name_plural = verbose_name
+
+    def __str__(self):
+        return f'{self.station_name}({self.station_no})'
 
 
 class CurrencyType(models.TextChoices):
@@ -114,3 +120,6 @@ class TransferSegment(models.Model):
         verbose_name = '传输段'
         verbose_name_plural = verbose_name
         unique_together = ('from_station', 'to_station')
+
+    def __str__(self):
+        return f'{self.from_station} -> {self.to_station}'
