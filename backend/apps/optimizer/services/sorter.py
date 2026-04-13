@@ -165,7 +165,7 @@ class SortingEngine:
             order_timings.append((order, order_start or 0.0, order_finish))
 
         total_seconds = max(station_available.values(), default=0.0)
-        concentration = max((m.busy_seconds for m in station_metrics.values()), default=0.0)
+        concentration = max((m.span_seconds for m in station_metrics.values()), default=0.0)
         route_switch = self._route_switch_count(sequence)
 
         score = (
