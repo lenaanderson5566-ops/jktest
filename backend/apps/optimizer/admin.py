@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import OptimizeMode, OptimizeModeParameter
+from .models import GlobalConfig, OptimizeMode, OptimizeModeParameter
 
 
 @admin.register(OptimizeMode)
@@ -13,3 +13,10 @@ class OptimizeModeAdmin(admin.ModelAdmin):
 class OptimizeModeParameterAdmin(admin.ModelAdmin):
     list_display = ('mode', 'category', 'station', 'value', 'enabled')
     list_filter = ('mode', 'category', 'enabled')
+
+
+@admin.register(GlobalConfig)
+class GlobalConfigAdmin(admin.ModelAdmin):
+    list_display = ('config_key', 'config_value', 'enabled', 'remark')
+    list_filter = ('enabled',)
+    search_fields = ('config_key', 'remark')
