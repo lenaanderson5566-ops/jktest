@@ -279,13 +279,14 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
     order_rows = list(
         OrganizationOrder.objects.filter(order_date=order_date)
         .select_related('organization', 'route')
-        .order_by('order_no', 'denomination')
+        .order_by('order_no', 'organization_id', 'route_id', 'denomination')
     )
     if not order_rows:
         raise ValueError(f'{order_date} 没有可排序订单。')
-    grouped: Dict[str, OrderAggregate] = {}
+    grouped: Dict[tuple[str, object, int, int], OrderAggregate] = {}
     for row in order_rows:
-        agg = grouped.get(row.order_no)
+        group_key = (row.order_no, row.order_date, row.organization_id, row.route_id)
+        agg = grouped.get(group_key)
         if agg is None:
             agg = OrderAggregate(
                 order_no=row.order_no,
@@ -296,7 +297,7 @@ def run_sorting_for_date(order_date, mode_no: str | None = None) -> RunResultSum
                 source_order=row,
                 quantities={},
             )
-            grouped[row.order_no] = agg
+            grouped[group_key] = agg
         agg.quantities[Decimal(str(row.denomination))] = agg.quantities.get(Decimal(str(row.denomination)), 0) + int(row.quantity)
     orders = list(grouped.values())
 
