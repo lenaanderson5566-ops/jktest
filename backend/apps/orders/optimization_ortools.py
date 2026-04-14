@@ -141,6 +141,11 @@ def _sequence_by_ortools(boxes: list[OrToolsBoxItem]) -> tuple[list[OrToolsBoxIt
         fallback = sorted(blocks, key=lambda b: sum(x.total_bundles for x in b), reverse=True)
         return [x for block in fallback for x in block], {'solver_status': 'fallback_no_ortools', 'solver_backend': 'none'}
 
+    # 避免在在线请求中构建 O(n^3) 规模模型导致 Gunicorn 超时。
+    if len(blocks) > 40:
+        fallback = sorted(blocks, key=lambda b: (b[0].route_no, -sum(x.total_bundles for x in b)))
+        return [x for block in fallback for x in block], {'solver_status': 'fallback_large_instance', 'solver_backend': 'heuristic'}
+
     model = cp_model.CpModel()
     n = len(blocks)
     x = {(b, p): model.NewBoolVar(f'x_{b}_{p}') for b in range(n) for p in range(n)}
@@ -149,35 +154,25 @@ def _sequence_by_ortools(boxes: list[OrToolsBoxItem]) -> tuple[list[OrToolsBoxIt
     for p in range(n):
         model.Add(sum(x[(b, p)] for b in range(n)) == 1)
 
-    route_no = [block[0].route_no for block in blocks]
+    routes = sorted({block[0].route_no for block in blocks})
+    route_rank = {route: i for i, route in enumerate(routes)}
     block_work = [sum(item.total_bundles for item in block) for block in blocks]
-    switch_terms = []
-    completion_terms = []
-    for p in range(n - 1):
-        diff_pairs = []
-        for i in range(n):
-            for j in range(n):
-                if i == j:
-                    continue
-                a = model.NewBoolVar(f'a_{i}_{j}_{p}')
-                model.Add(a <= x[(i, p)])
-                model.Add(a <= x[(j, p + 1)])
-                model.Add(a >= x[(i, p)] + x[(j, p + 1)] - 1)
-                if route_no[i] != route_no[j]:
-                    diff_pairs.append(a)
-        if diff_pairs:
-            sw = model.NewIntVar(0, 1, f'sw_{p}')
-            model.Add(sw == sum(diff_pairs))
-            switch_terms.append(sw)
-
+    obj_terms = []
     for b in range(n):
+        # 主目标：按线路聚集（同线路块尽量连续区间），并让大工作量靠前。
+        route_weight = route_rank[blocks[b][0].route_no] * (n + 1)
+        work_weight = max(block_work) - block_work[b]
         for p in range(n):
-            completion_terms.append(block_work[b] * (p + 1) * x[(b, p)])
-
-    model.Minimize((sum(switch_terms) * 1000) + sum(completion_terms))
+            obj_terms.append((route_weight * p + work_weight * (p + 1)) * x[(b, p)])
+    model.Minimize(sum(obj_terms))
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 5.0
+    solver.parameters.max_time_in_seconds = 1.5
+    solver.parameters.num_search_workers = 4
     status = solver.Solve(model)
+
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        fallback = sorted(blocks, key=lambda b: (b[0].route_no, -sum(x.total_bundles for x in b)))
+        return [x for block in fallback for x in block], {'solver_status': 'fallback_no_solution', 'solver_backend': 'heuristic'}
 
     ordered: list[tuple[int, int]] = []
     for p in range(n):
