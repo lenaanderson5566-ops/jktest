@@ -10,6 +10,10 @@
         <th scope="row"><a href="{% url 'admin_overview' %}">流水线示意图</a></th>
         <td>查看装箱工位与传输段的流程图式概览</td>
       </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin_overview_ortools' %}">流水线示意图（ORTools）</a></th>
+        <td>保持界面一致，使用独立 ORTools 计算引擎进行方案仿真</td>
+      </tr>
     </table>
   </div>
   {{ block.super }}
