@@ -40,6 +40,12 @@
   <h3 style="margin-top:20px;">装箱排序与分配方案对比（仿真）</h3>
   <p style="color:#666;">说明：若某些面额仅有一个兼容工位，则不同策略在该面额上的分配会天然一致，相关指标可能相同。</p>
   <p style="color:#666;">工位跨度=该工位首箱开始到末箱结束的时间窗口。当前“1号位/3号位集中导向”按业务定义实现为“优先压短对应工位跨度”：通过目标工位任务前置聚集 + 可分流量外移来缩短时间窗口。</p>
+  {% if ortools_lazy and not ortools_started %}
+    <p style="margin:12px 0;">
+      <a class="button" href="?run=1">开始运行 ORTools 优化</a>
+    </p>
+    <p style="color:#666;">说明：点击后才会启动 ORTools 求解，避免首次打开页面时阻塞。</p>
+  {% else %}
   <table class="adminlist" style="margin:12px 0;">
     <thead>
       <tr>
@@ -114,5 +120,6 @@
         {% endfor %}
       </tbody>
     </table>
+  {% endif %}
   {% endif %}
 {% endblock %}

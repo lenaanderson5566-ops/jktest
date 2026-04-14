@@ -246,13 +246,24 @@ def pipeline_overview_page(request, admin_site):
 def pipeline_overview_ortools_page(request, admin_site):
     from apps.orders.optimization_ortools import build_strategy_comparison_ortools
 
-    strategy_context = build_strategy_comparison_ortools()
+    started = request.GET.get('run') == '1'
+    strategy_context = (
+        build_strategy_comparison_ortools()
+        if started else
+        {
+            'has_data': False,
+            'results': [],
+            'summary': {'total_organizations': 0, 'total_boxes': 0, 'denomination_bundles': []},
+        }
+    )
     return render(request, 'admin/pipeline_overview.html', {
         **admin_site.each_context(request),
         'title': '流水线概览示意图（ORTools）',
         **build_pipeline_context(),
         **strategy_context,
         'strategy_export_url': reverse('admin_strategy_export_ortools'),
+        'ortools_lazy': True,
+        'ortools_started': started,
     })
 
 

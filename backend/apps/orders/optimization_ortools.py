@@ -6,6 +6,7 @@ from decimal import Decimal
 from itertools import groupby
 
 from apps.masterdata.models import (
+    GlobalConfig,
     PackingStation,
     StationDenominationEfficiency,
     StationDenominationSupport,
@@ -141,8 +142,8 @@ def _sequence_by_ortools(boxes: list[OrToolsBoxItem]) -> tuple[list[OrToolsBoxIt
         fallback = sorted(blocks, key=lambda b: sum(x.total_bundles for x in b), reverse=True)
         return [x for block in fallback for x in block], {'solver_status': 'fallback_no_ortools', 'solver_backend': 'none'}
 
-    # 避免在在线请求中构建 O(n^3) 规模模型导致 Gunicorn 超时。
-    if len(blocks) > 40:
+    max_blocks = int(_config_value('ORTOOLS_MAX_BLOCKS', 40))
+    if len(blocks) > max_blocks:
         fallback = sorted(blocks, key=lambda b: (b[0].route_no, -sum(x.total_bundles for x in b)))
         return [x for block in fallback for x in block], {'solver_status': 'fallback_large_instance', 'solver_backend': 'heuristic'}
 
@@ -166,8 +167,11 @@ def _sequence_by_ortools(boxes: list[OrToolsBoxItem]) -> tuple[list[OrToolsBoxIt
             obj_terms.append((route_weight * p + work_weight * (p + 1)) * x[(b, p)])
     model.Minimize(sum(obj_terms))
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 1.5
-    solver.parameters.num_search_workers = 4
+    solver.parameters.max_time_in_seconds = float(_config_value('ORTOOLS_MAX_TIME_SECONDS', 1.2))
+    solver.parameters.num_search_workers = int(_config_value('ORTOOLS_NUM_WORKERS', 2))
+    solver.parameters.random_seed = int(_config_value('ORTOOLS_RANDOM_SEED', 42))
+    solver.parameters.cp_model_presolve = True
+    solver.parameters.linearization_level = 0
     status = solver.Solve(model)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
@@ -191,6 +195,16 @@ def _sequence_by_ortools(boxes: list[OrToolsBoxItem]) -> tuple[list[OrToolsBoxIt
         cp_model.UNKNOWN: 'unknown',
     }
     return sequence, {'solver_status': status_map.get(status, 'unknown'), 'solver_backend': 'ortools_cp_sat'}
+
+
+def _config_value(key: str, default):
+    row = GlobalConfig.objects.filter(config_key=key, enabled=True).first()
+    if not row or row.config_value is None:
+        return default
+    try:
+        return type(default)(row.config_value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _simulate(
