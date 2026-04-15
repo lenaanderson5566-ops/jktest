@@ -120,6 +120,41 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if ortools_lazy and ortools_started %}
+      <h4 style="margin-top:16px;">ORTools 求解过程</h4>
+      {% for row in results %}
+        {% if row.metrics.solver_rounds %}
+          <p style="color:#666;">
+            方案：{{ row.name }}；
+            后端：{{ row.metrics.solver_backend }}；
+            最终状态：{{ row.metrics.solver_status }}；
+            最优目标值：{{ row.metrics.solver_best_objective }}
+          </p>
+          <table class="adminlist" style="margin-bottom:12px;">
+            <thead>
+              <tr>
+                <th>轮次</th>
+                <th>随机种子</th>
+                <th>求解状态</th>
+                <th>目标值</th>
+                <th>耗时(秒)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in row.metrics.solver_rounds %}
+                <tr>
+                  <td>{{ item.round }}</td>
+                  <td>{{ item.seed }}</td>
+                  <td>{{ item.status }}</td>
+                  <td>{{ item.objective }}</td>
+                  <td>{{ item.wall_time_seconds }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+      {% endfor %}
+    {% endif %}
   {% endif %}
   {% endif %}
 {% endblock %}

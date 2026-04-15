@@ -147,46 +147,17 @@ def _sequence_by_ortools(boxes: list[OrToolsBoxItem]) -> tuple[list[OrToolsBoxIt
         fallback = sorted(blocks, key=lambda b: (b[0].route_no, -sum(x.total_bundles for x in b)))
         return [x for block in fallback for x in block], {'solver_status': 'fallback_large_instance', 'solver_backend': 'heuristic'}
 
-    model = cp_model.CpModel()
     n = len(blocks)
-    x = {(b, p): model.NewBoolVar(f'x_{b}_{p}') for b in range(n) for p in range(n)}
-    for b in range(n):
-        model.Add(sum(x[(b, p)] for p in range(n)) == 1)
-    for p in range(n):
-        model.Add(sum(x[(b, p)] for b in range(n)) == 1)
-
     routes = sorted({block[0].route_no for block in blocks})
     route_rank = {route: i for i, route in enumerate(routes)}
     block_work = [sum(item.total_bundles for item in block) for block in blocks]
-    obj_terms = []
-    for b in range(n):
-        # 主目标：按线路聚集（同线路块尽量连续区间），并让大工作量靠前。
-        route_weight = route_rank[blocks[b][0].route_no] * (n + 1)
-        work_weight = max(block_work) - block_work[b]
-        for p in range(n):
-            obj_terms.append((route_weight * p + work_weight * (p + 1)) * x[(b, p)])
-    model.Minimize(sum(obj_terms))
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = float(_config_value('ORTOOLS_MAX_TIME_SECONDS', 1.2))
-    solver.parameters.num_search_workers = int(_config_value('ORTOOLS_NUM_WORKERS', 2))
-    solver.parameters.random_seed = int(_config_value('ORTOOLS_RANDOM_SEED', 42))
-    solver.parameters.cp_model_presolve = True
-    solver.parameters.linearization_level = 0
-    status = solver.Solve(model)
 
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        fallback = sorted(blocks, key=lambda b: (b[0].route_no, -sum(x.total_bundles for x in b)))
-        return [x for block in fallback for x in block], {'solver_status': 'fallback_no_solution', 'solver_backend': 'heuristic'}
+    round_count = int(_config_value('ORTOOLS_MULTI_ROUNDS', 3))
+    round_count = max(1, min(10, round_count))
+    max_time = float(_config_value('ORTOOLS_MAX_TIME_SECONDS', 1.2))
+    workers = int(_config_value('ORTOOLS_NUM_WORKERS', 2))
+    base_seed = int(_config_value('ORTOOLS_RANDOM_SEED', 42))
 
-    ordered: list[tuple[int, int]] = []
-    for p in range(n):
-        for b in range(n):
-            if solver.Value(x[(b, p)]) == 1:
-                ordered.append((p, b))
-                break
-    ordered.sort(key=lambda t: t[0])
-    sequence_blocks = [blocks[b] for _, b in ordered]
-    sequence = [item for block in sequence_blocks for item in block]
     status_map = {
         cp_model.OPTIMAL: 'optimal',
         cp_model.FEASIBLE: 'feasible',
@@ -194,7 +165,76 @@ def _sequence_by_ortools(boxes: list[OrToolsBoxItem]) -> tuple[list[OrToolsBoxIt
         cp_model.MODEL_INVALID: 'invalid',
         cp_model.UNKNOWN: 'unknown',
     }
-    return sequence, {'solver_status': status_map.get(status, 'unknown'), 'solver_backend': 'ortools_cp_sat'}
+
+    rounds: list[dict] = []
+    best_obj = None
+    best_order: list[int] | None = None
+    best_status = cp_model.UNKNOWN
+
+    for r in range(round_count):
+        model = cp_model.CpModel()
+        x = {(b, p): model.NewBoolVar(f'x_{b}_{p}') for b in range(n) for p in range(n)}
+        for b in range(n):
+            model.Add(sum(x[(b, p)] for p in range(n)) == 1)
+        for p in range(n):
+            model.Add(sum(x[(b, p)] for b in range(n)) == 1)
+
+        obj_terms = []
+        for b in range(n):
+            route_weight = route_rank[blocks[b][0].route_no] * (n + 1)
+            work_weight = max(block_work) - block_work[b]
+            for p in range(n):
+                obj_terms.append((route_weight * p + work_weight * (p + 1)) * x[(b, p)])
+        model.Minimize(sum(obj_terms))
+
+        solver = cp_model.CpSolver()
+        seed = base_seed + r
+        solver.parameters.max_time_in_seconds = max_time
+        solver.parameters.num_search_workers = workers
+        solver.parameters.random_seed = seed
+        solver.parameters.cp_model_presolve = True
+        solver.parameters.linearization_level = 0
+        status = solver.Solve(model)
+
+        objective_value = float(solver.ObjectiveValue()) if status in (cp_model.OPTIMAL, cp_model.FEASIBLE) else None
+        rounds.append({
+            'round': r + 1,
+            'seed': seed,
+            'status': status_map.get(status, 'unknown'),
+            'objective': round(objective_value, 2) if objective_value is not None else '-',
+            'wall_time_seconds': round(float(solver.WallTime()), 3),
+        })
+
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            ordered = []
+            for p in range(n):
+                for b in range(n):
+                    if solver.Value(x[(b, p)]) == 1:
+                        ordered.append((p, b))
+                        break
+            ordered.sort(key=lambda t: t[0])
+            current_order = [b for _, b in ordered]
+            if best_obj is None or (objective_value is not None and objective_value < best_obj):
+                best_obj = objective_value
+                best_order = current_order
+                best_status = status
+
+    if best_order is None:
+        fallback = sorted(blocks, key=lambda b: (b[0].route_no, -sum(x.total_bundles for x in b)))
+        return [x for block in fallback for x in block], {
+            'solver_status': 'fallback_no_solution',
+            'solver_backend': 'heuristic',
+            'solver_rounds': rounds,
+        }
+
+    sequence_blocks = [blocks[b] for b in best_order]
+    sequence = [item for block in sequence_blocks for item in block]
+    return sequence, {
+        'solver_status': status_map.get(best_status, 'unknown'),
+        'solver_backend': 'ortools_cp_sat',
+        'solver_rounds': rounds,
+        'solver_best_objective': round(float(best_obj), 2) if best_obj is not None else '-',
+    }
 
 
 def _config_value(key: str, default):
