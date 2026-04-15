@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import groupby
+from decimal import Decimal
 from typing import Callable
 
 from apps.masterdata.models import (
@@ -38,11 +39,33 @@ class StrategyResult:
 def build_strategy_comparison(include_details: bool = False) -> dict:
     boxes = _load_boxes()
     if not boxes:
-        return {'results': [], 'has_data': False}
+        return {
+            'results': [],
+            'has_data': False,
+            'summary': {
+                'total_organizations': 0,
+                'total_boxes': 0,
+                'denomination_bundles': [],
+            },
+        }
+
+    denomination_totals: dict[str, int] = defaultdict(int)
+    for box in boxes:
+        for denom, qty in box.denoms.items():
+            denomination_totals[denom] += qty
+
+    summary = {
+        'total_organizations': len({box.organization_id for box in boxes}),
+        'total_boxes': len(boxes),
+        'denomination_bundles': [
+            {'denomination': denom, 'bundle_count': total}
+            for denom, total in sorted(denomination_totals.items(), key=lambda x: Decimal(x[0]))
+        ],
+    }
 
     stations = list(PackingStation.objects.filter(enabled=True).order_by('station_order'))
     if not stations:
-        return {'results': [], 'has_data': True}
+        return {'results': [], 'has_data': True, 'summary': summary}
 
     transfer_map = {
         (seg.from_station_id, seg.to_station_id): float(seg.fixed_transfer_seconds)
@@ -81,6 +104,7 @@ def build_strategy_comparison(include_details: bool = False) -> dict:
     return {
         'has_data': True,
         'results': results,
+        'summary': summary,
     }
 
 

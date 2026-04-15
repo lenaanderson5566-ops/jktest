@@ -243,13 +243,31 @@ def pipeline_overview_page(request, admin_site):
     })
 
 
-def pipeline_strategy_export_page(request, admin_site):
-    from apps.orders.optimization import build_strategy_comparison
+def pipeline_overview_ortools_page(request, admin_site):
+    from apps.orders.optimization_ortools import build_strategy_comparison_ortools
 
-    target = (request.GET.get('strategy') or '').strip()
-    context = build_strategy_comparison(include_details=True)
-    results = context.get('results', [])
+    started = request.GET.get('run') == '1'
+    strategy_context = (
+        build_strategy_comparison_ortools()
+        if started else
+        {
+            'has_data': False,
+            'results': [],
+            'summary': {'total_organizations': 0, 'total_boxes': 0, 'denomination_bundles': []},
+        }
+    )
+    return render(request, 'admin/pipeline_overview.html', {
+        **admin_site.each_context(request),
+        'title': '流水线概览示意图（ORTools）',
+        **build_pipeline_context(),
+        **strategy_context,
+        'strategy_export_url': reverse('admin_strategy_export_ortools'),
+        'ortools_lazy': True,
+        'ortools_started': started,
+    })
 
+
+def _build_strategy_export_workbook(results, target):
     if target:
         results = [row for row in results if row.key == target]
 
@@ -312,7 +330,27 @@ def pipeline_strategy_export_page(request, admin_site):
                     step.get('process_seconds'),
                     alloc_txt,
                 ])
+    return wb
 
+
+def pipeline_strategy_export_page(request, admin_site):
+    from apps.orders.optimization import build_strategy_comparison
+
+    target = (request.GET.get('strategy') or '').strip()
+    context = build_strategy_comparison(include_details=True)
+    results = context.get('results', [])
+    wb = _build_strategy_export_workbook(results, target)
+    filename = f"strategy_detail_{target or 'all'}.xlsx"
+    return TransportRouteAdmin._wb_response(wb, filename)
+
+
+def pipeline_strategy_export_ortools_page(request, admin_site):
+    from apps.orders.optimization_ortools import build_strategy_comparison_ortools
+
+    target = (request.GET.get('strategy') or '').strip()
+    context = build_strategy_comparison_ortools(include_details=True)
+    results = context.get('results', [])
+    wb = _build_strategy_export_workbook(results, target)
     filename = f"strategy_detail_{target or 'all'}.xlsx"
     return TransportRouteAdmin._wb_response(wb, filename)
 

@@ -40,7 +40,33 @@
   <h3 style="margin-top:20px;">装箱排序与分配方案对比（仿真）</h3>
   <p style="color:#666;">说明：若某些面额仅有一个兼容工位，则不同策略在该面额上的分配会天然一致，相关指标可能相同。</p>
   <p style="color:#666;">工位跨度=该工位首箱开始到末箱结束的时间窗口。当前“1号位/3号位集中导向”按业务定义实现为“优先压短对应工位跨度”：通过目标工位任务前置聚集 + 可分流量外移来缩短时间窗口。</p>
-    <p><a class="button" href="{{ strategy_export_url }}">下载全部方案详细结果（Excel）</a></p>
+  {% if ortools_lazy and not ortools_started %}
+    <p style="margin:12px 0;">
+      <a class="button" href="?run=1">开始运行 ORTools 优化</a>
+    </p>
+    <p style="color:#666;">说明：点击后才会启动 ORTools 求解，避免首次打开页面时阻塞。</p>
+  {% else %}
+  <table class="adminlist" style="margin:12px 0;">
+    <thead>
+      <tr>
+        <th>总机构数</th>
+        <th>总箱数</th>
+        {% for item in summary.denomination_bundles %}
+          <th>{{ item.denomination }}面额捆数</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ summary.total_organizations }}</td>
+        <td>{{ summary.total_boxes }}</td>
+        {% for item in summary.denomination_bundles %}
+          <td>{{ item.bundle_count }}</td>
+        {% endfor %}
+      </tr>
+    </tbody>
+  </table>
+  <p><a class="button" href="{{ strategy_export_url }}">下载全部方案详细结果（Excel）</a></p>
   {% if not has_data %}
     <p>暂无流水线箱清单数据，请先导入订单并生成流水线拆分后再查看方案对比结果。</p>
   {% else %}
@@ -94,5 +120,41 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if ortools_lazy and ortools_started %}
+      <h4 style="margin-top:16px;">ORTools 求解过程</h4>
+      {% for row in results %}
+        {% if row.metrics.solver_rounds %}
+          <p style="color:#666;">
+            方案：{{ row.name }}；
+            后端：{{ row.metrics.solver_backend }}；
+            最终状态：{{ row.metrics.solver_status }}；
+            最优目标值：{{ row.metrics.solver_best_objective }}
+          </p>
+          <table class="adminlist" style="margin-bottom:12px;">
+            <thead>
+              <tr>
+                <th>轮次</th>
+                <th>随机种子</th>
+                <th>求解状态</th>
+                <th>目标值</th>
+                <th>耗时(秒)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in row.metrics.solver_rounds %}
+                <tr>
+                  <td>{{ item.round }}</td>
+                  <td>{{ item.seed }}</td>
+                  <td>{{ item.status }}</td>
+                  <td>{{ item.objective }}</td>
+                  <td>{{ item.wall_time_seconds }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+  {% endif %}
   {% endif %}
 {% endblock %}
